@@ -36,10 +36,57 @@
   <body>
     <div class="app-shell" id="top">
       <header class="topbar">
-        <a class="brand" href="#top" aria-label="Orb of Fate home">
-          <span class="brand-mark" aria-hidden="true">✦</span>
-          <span>orb-of-fate</span>
-        </a>
+        <div class="brand-wrap">
+          <button
+            class="brand"
+            id="brandSettingsToggle"
+            type="button"
+            aria-label="Open Orb of Fate render settings"
+            aria-expanded="false"
+            aria-controls="renderSettings"
+            aria-haspopup="dialog"
+          >
+            <span class="brand-mark" aria-hidden="true">✦</span>
+            <span>orb-of-fate</span>
+          </button>
+
+          <div
+            class="render-settings"
+            id="renderSettings"
+            role="dialog"
+            aria-label="Render quality settings"
+            hidden
+          >
+            <div class="render-settings-header">
+              <strong>Render controls</strong>
+              <span>GPU budget</span>
+            </div>
+
+            <label class="render-setting" for="resolutionSetting">
+              <span>Resolution</span>
+              <select id="resolutionSetting">
+                <option value="auto">Auto (adaptive)</option>
+                <option value="low">Low · 58%</option>
+                <option value="balanced">Balanced · 72%</option>
+                <option value="high">High · 86%</option>
+                <option value="full">Full · 100%</option>
+              </select>
+            </label>
+
+            <label class="render-setting" for="fidelitySetting">
+              <span>Fidelity</span>
+              <select id="fidelitySetting">
+                <option value="lite">Lite</option>
+                <option value="balanced">Balanced</option>
+                <option value="full" selected>Full</option>
+              </select>
+            </label>
+
+            <p class="render-settings-note" id="renderSettingsHint">
+              Auto lowers resolution only after sustained low FPS.
+            </p>
+          </div>
+        </div>
 
         <nav class="topnav" aria-label="Primary navigation">
           <a href="#experience">Experience</a>

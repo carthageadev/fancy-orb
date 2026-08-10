@@ -34,6 +34,10 @@ const selectedOrbName = document.querySelector("#selectedOrbName");
 const selectedOrbDescription = document.querySelector("#selectedOrbDescription");
 const selectedOrbTags = document.querySelector("#selectedOrbTags");
 const heroSubtitle = document.querySelector(".hero h1 span");
+const brandSettingsToggle = document.querySelector("#brandSettingsToggle");
+const renderSettings = document.querySelector("#renderSettings");
+const resolutionSetting = document.querySelector("#resolutionSetting");
+const fidelitySetting = document.querySelector("#fidelitySetting");
 
 let selectedIndex = 0;
 let paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -41,12 +45,33 @@ let seedOffset = 0;
 const compactDeviceQuery = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 const qualityLevels = [0.58, 0.72, 0.86, 1];
 let qualityLevelIndex = qualityLevels.length - 1;
+let adaptiveQualityEnabled = true;
+let fidelityValue = 1;
 let needsRender = true;
 let stageInView = true;
 let performanceSampleStart = 0;
 let performanceSampleFrames = 0;
 let lowFpsWindows = 0;
 let highFpsWindows = 0;
+
+function syncViewportMetrics() {
+  const viewportHeight = Math.max(1, Math.round(window.visualViewport?.height || window.innerHeight));
+  const viewportUnit = viewportHeight / 100;
+  const root = document.documentElement;
+  root.style.setProperty("--viewport-height", `${viewportHeight}px`);
+  root.style.setProperty("--viewport-1-5vh", `${viewportUnit * 1.5}px`);
+  root.style.setProperty("--viewport-1-8vh", `${viewportUnit * 1.8}px`);
+  root.style.setProperty("--viewport-2-5vh", `${viewportUnit * 2.5}px`);
+  root.style.setProperty("--viewport-3-8vh", `${viewportUnit * 3.8}px`);
+  root.style.setProperty("--viewport-5vh", `${viewportUnit * 5}px`);
+  root.style.setProperty("--viewport-9vh", `${viewportUnit * 9}px`);
+  root.style.setProperty("--viewport-10vh", `${viewportUnit * 10}px`);
+  root.style.setProperty("--viewport-19vh", `${viewportUnit * 19}px`);
+  root.style.setProperty("--viewport-23vh", `${viewportUnit * 23}px`);
+}
+
+syncViewportMetrics();
+window.visualViewport?.addEventListener("resize", syncViewportMetrics, { passive: true });
 
 function hexToRgb(hex) {
   const normalized = hex.replace("#", "");
@@ -86,6 +111,8 @@ function getFragmentShaderSource(gl) {
   const precision = getFragmentPrecision(gl);
   return highQualityFragmentShader
     .replace("precision highp float;", `precision ${precision} float;`)
+    .replace("uniform float uStarDensity;", "uniform float uStarDensity;\nuniform float uFidelity;")
+    .replace("float detail = smoothstep(90.0, 200.0, uRes.y);", "float detail = smoothstep(90.0, 200.0, uRes.y) * uFidelity;")
     .replace("gl_FragColor = vec4(col, 1.0);", "gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);")
     .replace("gl_FragColor = vec4(shade(p), 1.0);", "gl_FragColor = vec4(clamp(shade(p), 0.0, 1.0), 1.0);");
 }
@@ -139,7 +166,8 @@ class OrbRenderer {
     this.lastHeight = 0;
     this.visible = true;
     this.contextLost = false;
-    this.qualityScale = qualityLevels[qualityLevels.length - 1];
+    this.qualityScale = qualityLevels[qualityLevelIndex];
+    this.fidelity = fidelityValue;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
     if (!this.gl) {
@@ -181,7 +209,8 @@ class OrbRenderer {
       spin: gl.getUniformLocation(this.program, "uSpin"),
       archetype: gl.getUniformLocation(this.program, "uArch"),
       lens: gl.getUniformLocation(this.program, "uLens"),
-      starDensity: gl.getUniformLocation(this.program, "uStarDensity")
+      starDensity: gl.getUniformLocation(this.program, "uStarDensity"),
+      fidelity: gl.getUniformLocation(this.program, "uFidelity")
     };
     gl.clearColor(0, 0, 0, 1);
     gl.disable(gl.BLEND);
@@ -200,6 +229,10 @@ class OrbRenderer {
     this.qualityScale = scale;
     this.lastWidth = 0;
     this.lastHeight = 0;
+  }
+
+  setFidelity(value) {
+    this.fidelity = value;
   }
 
   setOrb(data, index) {
@@ -263,6 +296,7 @@ class OrbRenderer {
     gl.uniform1f(this.locations.archetype, -1);
     gl.uniform1f(this.locations.lens, 0.4);
     gl.uniform1f(this.locations.starDensity, this.starDensity);
+    gl.uniform1f(this.locations.fidelity, this.fidelity);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
   }
@@ -281,6 +315,65 @@ function setQualityLevel(nextIndex) {
   needsRender = true;
 }
 
+const resolutionModes = {
+  low: 0,
+  balanced: 1,
+  high: 2,
+  full: 3
+};
+
+const fidelityModes = {
+  lite: 0.58,
+  balanced: 0.8,
+  full: 1
+};
+
+function applyResolutionMode(mode) {
+  adaptiveQualityEnabled = mode === "auto";
+  if (adaptiveQualityEnabled) {
+    setQualityLevel(qualityLevels.length - 1);
+  } else {
+    setQualityLevel(resolutionModes[mode] ?? resolutionModes.balanced);
+  }
+  resetPerformanceSample();
+  needsRender = true;
+}
+
+function applyFidelityMode(mode) {
+  fidelityValue = fidelityModes[mode] ?? fidelityModes.full;
+  rendererPool.forEach((renderer) => renderer.setFidelity(fidelityValue));
+  needsRender = true;
+}
+
+function setRenderSettingsOpen(isOpen) {
+  if (!brandSettingsToggle || !renderSettings) return;
+  renderSettings.hidden = !isOpen;
+  brandSettingsToggle.setAttribute("aria-expanded", String(isOpen));
+}
+
+function setupRenderSettings() {
+  if (!brandSettingsToggle || !renderSettings) return;
+
+  brandSettingsToggle.addEventListener("click", () => {
+    setRenderSettingsOpen(renderSettings.hidden);
+  });
+
+  resolutionSetting?.addEventListener("change", (event) => {
+    applyResolutionMode(event.target.value);
+  });
+
+  fidelitySetting?.addEventListener("change", (event) => {
+    applyFidelityMode(event.target.value);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (renderSettings.hidden) return;
+    if (!renderSettings.contains(event.target) && !brandSettingsToggle.contains(event.target)) {
+      setRenderSettingsOpen(false);
+    }
+  });
+}
+
 function resetPerformanceSample() {
   performanceSampleStart = 0;
   performanceSampleFrames = 0;
@@ -289,7 +382,7 @@ function resetPerformanceSample() {
 }
 
 function updateAdaptiveQuality(now, didRender) {
-  if (!didRender || paused || document.hidden || !stageInView) return;
+  if (!adaptiveQualityEnabled || !didRender || paused || document.hidden || !stageInView) return;
   if (!performanceSampleStart) performanceSampleStart = now;
   performanceSampleFrames += 1;
 
@@ -359,13 +452,44 @@ function buildOrbCards() {
     card.addEventListener("click", () => selectOrb(index));
   });
 
-  for (let index = 0; index < Math.min(5, orbData.length); index += 1) {
-    const canvas = document.createElement("canvas");
-    canvas.setAttribute("aria-hidden", "true");
-    rendererPool.push(new OrbRenderer(canvas, orbData[index], index));
+  rendererBadge.textContent = "webgl / loading shader";
+}
+
+const maxRendererPoolSize = Math.min(5, orbData.length);
+let rendererInitializationFailed = false;
+
+function scheduleRendererWork(callback) {
+  window.requestAnimationFrame(() => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(callback, { timeout: 350 });
+    } else {
+      callback();
+    }
+  });
+}
+
+function initializeRendererPool(index = 0) {
+  if (index >= maxRendererPoolSize) {
+    rendererBadge.textContent = rendererInitializationFailed
+      ? "webgl / partial renderer"
+      : "webgl / hero glsl online";
+    updateLayout();
+    return;
   }
 
-  rendererBadge.textContent = "webgl / hero glsl online";
+  scheduleRendererWork(() => {
+    const canvas = document.createElement("canvas");
+    canvas.setAttribute("aria-hidden", "true");
+    try {
+      rendererPool.push(new OrbRenderer(canvas, orbData[index], index));
+    } catch (error) {
+      rendererInitializationFailed = true;
+      console.error(`Could not initialize orb renderer ${index}.`, error);
+    }
+    rendererBadge.textContent = `webgl / loading shader ${rendererPool.length}/${maxRendererPoolSize}`;
+    updateLayout();
+    initializeRendererPool(index + 1);
+  });
 }
 
 function updateMeta() {
@@ -459,10 +583,12 @@ pauseButton.addEventListener("click", () => {
   resetPerformanceSample();
 });
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setRenderSettingsOpen(false);
   if (event.key === "ArrowLeft") shiftOrb(-1);
   if (event.key === "ArrowRight") shiftOrb(1);
 });
 window.addEventListener("resize", () => {
+  syncViewportMetrics();
   rendererPool.forEach((renderer) => renderer.resize());
   needsRender = true;
   resetPerformanceSample();
@@ -484,8 +610,10 @@ if (orbStage && "IntersectionObserver" in window) {
   stageObserver.observe(orbStage);
 }
 
+setupRenderSettings();
 buildOrbCards();
 updateLayout();
+initializeRendererPool();
 pauseButton.textContent = paused ? "Resume field" : "Pause field";
 
 let lastTime = 0;
