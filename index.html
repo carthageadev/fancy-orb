@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Orb of Fate — an original raw WebGL and GLSL study of glass, stars, and motion."
+    />
+    <link rel="canonical" href="http://127.0.0.1:4173/" />
+    <link rel="icon" href="./site-icon.svg" type="image/svg+xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Orb of Fate" />
+    <meta property="og:title" content="Orb of Fate — glassy star orbs in raw GLSL" />
+    <meta
+      property="og:description"
+      content="Explore a raw WebGL study of refracted glass, spectral rims, shooting stars, and drifting galaxy fields."
+    />
+    <meta property="og:url" content="http://127.0.0.1:4173/" />
+    <meta property="og:image" content="http://127.0.0.1:4173/site-icon.svg" />
+    <meta property="og:image:type" content="image/svg+xml" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="A dark glass orb with stars and a spectral chromatic rim" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Orb of Fate — glassy star orbs in raw GLSL" />
+    <meta
+      name="twitter:description"
+      content="A raw WebGL study of refracted glass, spectral rims, shooting stars, and drifting galaxy fields."
+    />
+    <meta name="twitter:image" content="http://127.0.0.1:4173/site-icon.svg" />
+    <meta name="twitter:image:alt" content="A dark glass orb with stars and a spectral chromatic rim" />
+    <title>Orb of Fate — GLSL study</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="top">
+      <header class="topbar">
+        <a class="brand" href="#top" aria-label="Orb of Fate home">
+          <span class="brand-mark" aria-hidden="true">✦</span>
+          <span>orb-of-fate</span>
+        </a>
+
+        <nav class="topnav" aria-label="Primary navigation">
+          <a href="#experience">Experience</a>
+          <a href="#shader-notes">Shader notes</a>
+          <a href="#about">About</a>
+        </nav>
+
+        <div class="topbar-actions">
+          <span class="stack-badge" id="rendererBadge">initializing renderer</span>
+          <a class="quiet-link" href="#shader-notes">Read the study <span aria-hidden="true">↗</span></a>
+        </div>
+      </header>
+
+      <main>
+        <div class="hero-viewport">
+          <section class="hero" id="experience">
+            <p class="eyebrow">RAW WEBGL / HERO GLSL ES 1.00</p>
+            <h1>Quiet light,<br /><span>uncertain orbit.</span></h1>
+            <p class="lede">
+              A small fragment-shader study in glass, parallax, and drifting star fields — built from
+              scratch with no image textures.
+            </p>
+
+            <div class="hero-actions" aria-label="Shader controls">
+              <button class="button button-primary" id="pauseToggle" type="button">Pause field</button>
+              <button class="button button-secondary" id="shuffleButton" type="button">Re-seed orbs</button>
+            </div>
+          </section>
+
+          <section class="orb-stage" aria-label="Orb carousel">
+            <button class="carousel-arrow" id="previousOrb" type="button" aria-label="Previous orb">‹</button>
+            <div class="orb-track" id="orbTrack"></div>
+            <button class="carousel-arrow" id="nextOrb" type="button" aria-label="Next orb">›</button>
+
+            <div class="orb-meta" aria-live="polite">
+              <p class="meta-kicker" id="selectedIndexLabel">01 / 11</p>
+              <h2 id="selectedOrbName">Aster</h2>
+              <p id="selectedOrbDescription">A pale field with a soft blue edge.</p>
+              <div class="meta-pills" id="selectedOrbTags" aria-label="Selected orb traits"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="study-section" id="shader-notes">
+          <div class="section-heading">
+            <p class="eyebrow">THE LITTLE LAB</p>
+            <h2>Dual layers make the illusion.</h2>
+            <p>
+              The hero pass reconstructs a glass sphere from screen coordinates, samples a rotating
+              galaxy on the front and refracted back walls, then re-evaluates the rim per RGB channel.
+            </p>
+          </div>
+
+          <div class="study-grid">
+            <article class="study-card">
+              <span class="card-number">01</span>
+              <h3>Sphere mask</h3>
+              <p>
+                Reconstruct the front hemisphere and the refracted back-wall hit from the fragment
+                coordinate. The same rotating sphere supplies both layers of the glass.
+              </p>
+            </article>
+            <article class="study-card">
+              <span class="card-number">02</span>
+              <h3>Star field</h3>
+              <p>
+                A tilted galaxy band, nebula pockets, dust lanes, three star scales, and a pulsar are
+                generated from stable hashes, so every orb gets its own sky without a texture.
+              </p>
+            </article>
+            <article class="study-card">
+              <span class="card-number">03</span>
+              <h3>Liquid shell</h3>
+              <p>
+                The lens falloff grows toward grazing angles, then separate R/G/B samples create the
+                chromatic edge while Fresnel lighting and specular lobes sell the liquid glass.
+              </p>
+            </article>
+          </div>
+
+          <div class="code-card">
+            <div class="code-card-header">
+              <span>hero.frag.glsl</span>
+              <span class="code-language">GLSL ES 1.00</span>
+            </div>
+            <pre><code><span class="code-keyword">float</span> k = uLens * fall * swell;
+<span class="code-keyword">float</span> cR = <span class="code-number">1.4</span> * (<span class="code-number">1.0</span> + <span class="code-number">0.06</span> * sin(uTime * <span class="code-number">1.3</span> + uPhase));
+<span class="code-keyword">float</span> cG = <span class="code-number">1.2</span> * (<span class="code-number">1.0</span> + <span class="code-number">0.06</span> * sin(uTime * <span class="code-number">1.3</span> + uPhase + <span class="code-number">2.1</span>));
+<span class="code-keyword">vec3</span> col = <span class="code-function">vec3</span>(shade(p * (<span class="code-number">1.0</span> - k * cR)).r,
+                  shade(p * (<span class="code-number">1.0</span> - k * cG)).g,
+                  shade(p * (<span class="code-number">1.0</span> - k)).b);</code></pre>
+          </div>
+        </section>
+
+        <section class="about-section" id="about">
+          <div>
+            <p class="eyebrow">ABOUT THIS BUILD</p>
+            <h2>A tidy, inspectable starting point for shader experiments.</h2>
+          </div>
+          <p>
+            This is a clean-room recreation of the observable visual idea: circular canvases, a glass
+            rim, colored nebulae, sparse stars, and a five-position carousel. The GLSL, layout, and
+            controls in this folder are original and intentionally dependency-free.
+          </p>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span>orb-of-fate / shader study</span>
+        <span>raw WebGL · no textures · no framework</span>
+      </footer>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
