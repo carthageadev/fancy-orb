@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fancy Orbs — WebGL Nebula Orbs</title>
+  <meta name="description" content="Galaxies in glass — starfield, nebulae, dust lanes and aurora rendered entirely in WebGL fragment shaders. One seed per orb, pure GPU math from seed to pixel." />
+  <meta name="theme-color" content="#0a0a0f" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <!-- Open Graph — swap ./og-image.png for an absolute https:// URL when deploying -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Fancy Orbs" />
+  <meta property="og:title" content="Fancy Orbs — WebGL Nebula Orbs" />
+  <meta property="og:description" content="Galaxies in glass. Starfield, nebulae and aurora rendered entirely in fragment shaders — no libraries, no assets, no canvas 2D." />
+  <meta property="og:image" content="./og-image.svg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="A glass sphere containing a purple and blue galaxy nebula" />
+  <meta property="og:locale" content="en_US" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Fancy Orbs — WebGL Nebula Orbs" />
+  <meta name="twitter:description" content="Galaxies in glass. Starfield, nebulae and aurora rendered entirely in fragment shaders — no libraries, no assets, no canvas 2D." />
+  <meta name="twitter:image" content="./og-image.svg" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="masthead">
+      <p class="kicker">WebGL shader showcase · 100% GPU</p>
+      <h1>Fancy Orbs</h1>
+      <p>
+        Every orb is a galaxy rendered entirely in a fragment shader — starfield,
+        nebulae, dust lanes, aurora, glass refraction and fresnel rim. No libraries,
+        no assets, no canvas 2D: each frame is pure GPU math from seed to pixel.
+      </p>
+    </header>
+
+    <div class="hero" id="hero">
+      <div id="hero-orb"></div>
+      <div class="label">seed · <span>voice-preview</span></div>
+    </div>
+
+    <section>
+      <h2>Live performance</h2>
+      <p class="note">Two render paths, measured on your GPU: single-pass hero shaders and a
+        batched instanced atlas for small orbs. Offscreen orbs pause automatically.</p>
+      <div class="stats" id="stats">
+        <div class="stat"><div class="value" id="st-fps">—</div><div class="key">Frames / sec</div></div>
+        <div class="stat"><div class="value" id="st-visible">—</div><div class="key">Rendering now</div></div>
+        <div class="stat"><div class="value" id="st-total">—</div><div class="key">Orbs mounted</div></div>
+        <div class="stat"><div class="value" id="st-path">—</div><div class="key">Orb path</div></div>
+        <div class="stat"><div class="value" id="st-dpr">—</div><div class="key">Pixel ratio</div></div>
+      </div>
+      <p class="perf-note">
+        Cost scales with <b>visible</b> orbs, not mounted ones — hidden orbs skip their
+        fragment pass entirely. The shader also rebalances itself by target size: large
+        orbs get the dual-layer glass refraction plus a chromatic lens, small orbs switch
+        to the single-layer instanced program, and both drop dense star dust below
+        ~200px to kill aliasing. Cap your orb count via CSS <code>content-visibility</code>
+        or lazy mounting if you need hard guarantees; also declare
+        <code>&lt;meta name="color-scheme" content="dark"&gt;</code> to keep scrollbars
+        and form controls in dark mode.
+      </p>
+    </section>
+
+    <section>
+      <h2>Named orbs</h2>
+      <p class="note">Nine orbs — each draws its own galaxy archetype (spiral, nebula,
+        core, deep) and palette, derived from the hash of its name.</p>
+      <div class="gallery" id="gallery"></div>
+    </section>
+
+    <section>
+      <h2>Batched orbs</h2>
+      <p class="note">Size 40 — rendered through the instanced-atlas path with a single
+        draw call for the whole row.</p>
+      <div class="row" id="small-row"></div>
+    </section>
+
+    <footer>
+      Fragment-shader orbs — shaders in <code>shaders/</code> and <code>shaders.js</code>,
+      engine in <code>agent-orb.js</code>. One 8px placeholder PNG at boot, nothing else
+      is loaded off-disk.
+    </footer>
+  </div>
+
+  <script type="module">
+    import { createOrb, orbDebug, MAX_DPR } from './agent-orb.js';
+
+    // ── hero orb — explicit palette, size = min(300, 0.78 * min(w, h)) of its slot
+    const heroBox = document.getElementById('hero');
+    const heroSize = Math.min(300, Math.round(0.78 * Math.min(heroBox.clientWidth, heroBox.clientHeight)));
+    const hero = createOrb({
+      size: heroSize,
+      seed: 'voice-preview',
+      palette: { anchor: '#131A2E', accents: ['#3B82F6', '#8B5CF6', '#EC4899'] },
+      dpr: 'full',
+      chrome: 'full',
+      crossfade: true,
+      isDark: true,
+    });
+    document.getElementById('hero-orb').appendChild(hero.element);
+
+    // ── named orbs: gallery, defaults derived from seed
+    const voices = [
+      { name: 'Eve',     tag: 'Soft, empathetic, soothing' },
+      { name: 'Leo',     tag: 'Clear, confident narration' },
+      { name: 'Rex',     tag: 'Deep, grounded' },
+      { name: 'Sal',     tag: 'Warm, casual' },
+      { name: 'Carina',  tag: 'Soft, empathetic, soothing' },
+      { name: 'Zagan',   tag: 'Powerful, dramatic' },
+      { name: 'Helix',   tag: 'Bold, dynamic' },
+      { name: 'Orion',   tag: 'Rich, versatile' },
+      { name: 'Luna',    tag: 'Calm, melodic' },
+    ];
+    const gallery = document.getElementById('gallery');
+    voices.forEach((voice) => {
+      const card = document.createElement('div');
+      card.className = 'voice';
+      const orb = createOrb({ size: 168, seed: voice.name, isDark: true });
+      card.appendChild(orb.element);
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = voice.name;
+      const tag = document.createElement('div');
+      tag.className = 'tag';
+      tag.textContent = voice.tag;
+      card.appendChild(name);
+      card.appendChild(tag);
+      gallery.appendChild(card);
+    });
+
+    // ── batched orbs
+    const smallRow = document.getElementById('small-row');
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].forEach((seed) => {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      const orb = createOrb({ size: 40, seed, isDark: true });
+      badge.appendChild(orb.element);
+      const name = document.createElement('b');
+      name.textContent = seed;
+      badge.appendChild(name);
+      smallRow.appendChild(badge);
+    });
+
+    // ── live performance panel
+    const stFps = document.getElementById('st-fps');
+    const stVisible = document.getElementById('st-visible');
+    const stTotal = document.getElementById('st-total');
+    const stPath = document.getElementById('st-path');
+    const stDpr = document.getElementById('st-dpr');
+
+    let frames = 0;
+    let last = performance.now();
+
+    function tick() {
+      frames++;
+      const now = performance.now();
+      if (now - last >= 500) {
+        const fps = Math.round((frames * 1000) / (now - last));
+        frames = 0;
+        last = now;
+        stFps.textContent = `${fps}`;
+
+        const dbg = orbDebug();
+        stVisible.textContent = `${dbg.orbs.filter((o) => o.visible).length}`;
+        stTotal.textContent = `${dbg.count}`;
+        stPath.textContent = dbg.heroReady && dbg.batchReady ? 'dual' : dbg.batchReady ? 'batch' : 'hero';
+        const dpr = Math.min(MAX_DPR, Math.max(1, devicePixelRatio || 1));
+        stDpr.textContent = dpr === Math.round(dpr) ? `${dpr}×` : `${dpr.toFixed(1)}×`;
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
