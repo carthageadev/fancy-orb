@@ -23,6 +23,7 @@ const layoutByDistance = {
 };
 
 const track = document.querySelector("#orbTrack");
+const orbStage = document.querySelector(".orb-stage");
 const previousButton = document.querySelector("#previousOrb");
 const nextButton = document.querySelector("#nextOrb");
 const pauseButton = document.querySelector("#pauseToggle");
@@ -37,6 +38,15 @@ const heroSubtitle = document.querySelector(".hero h1 span");
 let selectedIndex = 0;
 let paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let seedOffset = 0;
+const compactDeviceQuery = window.matchMedia("(max-width: 640px), (pointer: coarse)");
+const qualityLevels = [0.58, 0.72, 0.86, 1];
+let qualityLevelIndex = qualityLevels.length - 1;
+let needsRender = true;
+let stageInView = true;
+let performanceSampleStart = 0;
+let performanceSampleFrames = 0;
+let lowFpsWindows = 0;
+let highFpsWindows = 0;
 
 function hexToRgb(hex) {
   const normalized = hex.replace("#", "");
@@ -48,9 +58,15 @@ function mixRgb(first, second, amount) {
   return first.map((channel, index) => channel + (second[index] - channel) * amount);
 }
 
+function stripShaderComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\r\n]*/g, "");
+}
+
 function compileShader(gl, type, source) {
   const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
+  gl.shaderSource(shader, stripShaderComments(source));
   gl.compileShader(shader);
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
     const message = gl.getShaderInfoLog(shader) || "unknown shader compile error";
@@ -60,9 +76,42 @@ function compileShader(gl, type, source) {
   return shader;
 }
 
+function getFragmentPrecision(gl) {
+  if (typeof gl.getShaderPrecisionFormat !== "function") return "mediump";
+  const highPrecision = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+  return highPrecision && highPrecision.precision > 0 ? "highp" : "mediump";
+}
+
+function getFragmentShaderSource(gl) {
+  const precision = getFragmentPrecision(gl);
+  return highQualityFragmentShader
+    .replace("precision highp float;", `precision ${precision} float;`)
+    .replace("gl_FragColor = vec4(col, 1.0);", "gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);")
+    .replace("gl_FragColor = vec4(shade(p), 1.0);", "gl_FragColor = vec4(clamp(shade(p), 0.0, 1.0), 1.0);");
+}
+
+function createWebGLContext(canvas) {
+  const attributes = {
+    alpha: false,
+    antialias: true,
+    depth: false,
+    premultipliedAlpha: false,
+    preserveDrawingBuffer: false,
+    powerPreference: "default"
+  };
+  return canvas.getContext("webgl", attributes) || canvas.getContext("experimental-webgl", attributes);
+}
+
+const quadVertices = new Float32Array([
+  -1, -1, 0, 1,
+  1, -1, 1, 1,
+  -1, 1, 0, 0,
+  1, 1, 1, 0
+]);
+
 function createProgram(gl) {
   const vertexShader = compileShader(gl, gl.VERTEX_SHADER, highQualityVertexShader);
-  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, highQualityFragmentShader);
+  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, getFragmentShaderSource(gl));
   const program = gl.createProgram();
   gl.attachShader(program, vertexShader);
   gl.attachShader(program, fragmentShader);
@@ -82,68 +131,91 @@ function createProgram(gl) {
 class OrbRenderer {
   constructor(canvas, data, index) {
     this.canvas = canvas;
-    this.data = data;
-    this.index = index;
-    this.seed = index * 17.13 + 4.7;
-    this.audio = index === 0 ? 0.035 : 0;
-    this.phase = this.seed * 0.73 + data.name.length * 0.13;
-    this.spin = this.seed * 0.19;
-    this.starDensity = data.starDensity ?? 1;
     this.gl = null;
     this.program = null;
     this.buffer = null;
     this.locations = null;
     this.lastWidth = 0;
     this.lastHeight = 0;
-    this.gl = canvas.getContext("webgl", {
-      alpha: true,
-      antialias: true,
-      depth: false,
-      premultipliedAlpha: true,
-      preserveDrawingBuffer: true,
-      powerPreference: "high-performance"
-    });
+    this.visible = true;
+    this.contextLost = false;
+    this.qualityScale = qualityLevels[qualityLevels.length - 1];
+    this.setOrb(data, index);
+    this.gl = createWebGLContext(canvas);
     if (!this.gl) {
       throw new Error("WebGL is required for orb-of-fate; no CSS fallback is provided.");
     }
-    this.program = createProgram(this.gl);
-    this.buffer = this.gl.createBuffer();
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buffer);
-    this.gl.bufferData(
-      this.gl.ARRAY_BUFFER,
-      new Float32Array([
-        -1, -1, 0, 1,
-        1, -1, 1, 1,
-        -1, 1, 0, 0,
-        1, 1, 1, 0
-      ]),
-      this.gl.STATIC_DRAW
-    );
+    this.canvas.addEventListener("webglcontextlost", (event) => {
+      event.preventDefault();
+      this.contextLost = true;
+      needsRender = true;
+    }, { passive: false });
+    this.canvas.addEventListener("webglcontextrestored", () => {
+      this.contextLost = false;
+      this.initializeGpu();
+      this.lastWidth = 0;
+      this.lastHeight = 0;
+      needsRender = true;
+    });
+    this.initializeGpu();
+  }
+
+  initializeGpu() {
+    const gl = this.gl;
+    this.program = createProgram(gl);
+    this.buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
     this.locations = {
       position: 0,
       uv: 1,
-      resolution: this.gl.getUniformLocation(this.program, "uRes"),
-      background: this.gl.getUniformLocation(this.program, "uBg"),
-      anchor: this.gl.getUniformLocation(this.program, "uAnchor"),
-      color0: this.gl.getUniformLocation(this.program, "uC0"),
-      color1: this.gl.getUniformLocation(this.program, "uC1"),
-      color2: this.gl.getUniformLocation(this.program, "uC2"),
-      time: this.gl.getUniformLocation(this.program, "uTime"),
-      phase: this.gl.getUniformLocation(this.program, "uPhase"),
-      audio: this.gl.getUniformLocation(this.program, "uAudio"),
-      spin: this.gl.getUniformLocation(this.program, "uSpin"),
-      archetype: this.gl.getUniformLocation(this.program, "uArch"),
-      lens: this.gl.getUniformLocation(this.program, "uLens"),
-      starDensity: this.gl.getUniformLocation(this.program, "uStarDensity")
+      resolution: gl.getUniformLocation(this.program, "uRes"),
+      background: gl.getUniformLocation(this.program, "uBg"),
+      anchor: gl.getUniformLocation(this.program, "uAnchor"),
+      color0: gl.getUniformLocation(this.program, "uC0"),
+      color1: gl.getUniformLocation(this.program, "uC1"),
+      color2: gl.getUniformLocation(this.program, "uC2"),
+      time: gl.getUniformLocation(this.program, "uTime"),
+      phase: gl.getUniformLocation(this.program, "uPhase"),
+      audio: gl.getUniformLocation(this.program, "uAudio"),
+      spin: gl.getUniformLocation(this.program, "uSpin"),
+      archetype: gl.getUniformLocation(this.program, "uArch"),
+      lens: gl.getUniformLocation(this.program, "uLens"),
+      starDensity: gl.getUniformLocation(this.program, "uStarDensity")
     };
-    this.accentA = hexToRgb(data.a);
-    this.accentB = hexToRgb(data.b);
-    this.accentC = hexToRgb(data.c || data.b);
-    this.anchor = mixRgb(this.accentA, this.accentB, 0.28);
+    gl.clearColor(0, 0, 0, 1);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
   }
 
   setSelected(isSelected) {
     this.audio = isSelected ? 0.035 : 0;
+  }
+
+  setVisible(isVisible) {
+    this.visible = isVisible;
+  }
+
+  setQualityScale(scale) {
+    this.qualityScale = scale;
+    this.lastWidth = 0;
+    this.lastHeight = 0;
+  }
+
+  setOrb(data, index) {
+    this.data = data;
+    this.index = index;
+    this.seed = seedOffset + index * 17.13 + 4.7;
+    this.audio = 0;
+    this.phase = this.seed * 0.73 + data.name.length * 0.13;
+    this.spin = this.seed * 0.19;
+    this.starDensity = data.starDensity ?? 1;
+    this.accentA = hexToRgb(data.a);
+    this.accentB = hexToRgb(data.b);
+    this.accentC = hexToRgb(data.c || data.b);
+    this.anchor = mixRgb(this.accentA, this.accentB, 0.28);
+    this.lastWidth = 0;
+    this.lastHeight = 0;
   }
 
   setSeed(seed) {
@@ -153,7 +225,9 @@ class OrbRenderer {
   }
 
   resize() {
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const isCompactDevice = compactDeviceQuery.matches;
+    const maxPixelRatio = isCompactDevice ? 1.25 : 1.75;
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio) * this.qualityScale;
     const width = Math.max(1, Math.round(this.canvas.clientWidth * pixelRatio));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * pixelRatio));
     if (width === this.lastWidth && height === this.lastHeight) return;
@@ -165,6 +239,9 @@ class OrbRenderer {
   }
 
   render(time) {
+    const contextLost = this.contextLost
+      || (typeof this.gl.isContextLost === "function" && this.gl.isContextLost());
+    if (contextLost) return false;
     this.resize();
     const gl = this.gl;
     gl.useProgram(this.program);
@@ -187,11 +264,72 @@ class OrbRenderer {
     gl.uniform1f(this.locations.lens, 0.4);
     gl.uniform1f(this.locations.starDensity, this.starDensity);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    return true;
   }
 }
 
-const renderers = [];
+const renderers = orbData.map(() => null);
+const rendererPool = [];
 const cards = [];
+
+function setQualityLevel(nextIndex) {
+  const nextLevel = Math.max(0, Math.min(qualityLevels.length - 1, nextIndex));
+  if (nextLevel === qualityLevelIndex) return;
+  qualityLevelIndex = nextLevel;
+  const scale = qualityLevels[qualityLevelIndex];
+  rendererPool.forEach((renderer) => renderer.setQualityScale(scale));
+  needsRender = true;
+}
+
+function resetPerformanceSample() {
+  performanceSampleStart = 0;
+  performanceSampleFrames = 0;
+  lowFpsWindows = 0;
+  highFpsWindows = 0;
+}
+
+function updateAdaptiveQuality(now, didRender) {
+  if (!didRender || paused || document.hidden || !stageInView) return;
+  if (!performanceSampleStart) performanceSampleStart = now;
+  performanceSampleFrames += 1;
+
+  const elapsed = now - performanceSampleStart;
+  if (elapsed < 1600) return;
+
+  const fps = performanceSampleFrames * 1000 / elapsed;
+  performanceSampleStart = now;
+  performanceSampleFrames = 0;
+
+  if (fps < 30) {
+    lowFpsWindows += 1;
+    highFpsWindows = 0;
+    if (lowFpsWindows >= 2) {
+      setQualityLevel(qualityLevelIndex - 1);
+      lowFpsWindows = 0;
+    }
+    return;
+  }
+
+  lowFpsWindows = 0;
+  if (fps > 52) {
+    highFpsWindows += 1;
+    if (highFpsWindows >= 3) {
+      setQualityLevel(qualityLevelIndex + 1);
+      highFpsWindows = 0;
+    }
+  } else {
+    highFpsWindows = 0;
+  }
+}
+
+function renderVisibleOrbs(time) {
+  let didRender = false;
+  rendererPool.forEach((renderer) => {
+    if (renderer.visible && renderer.render(time)) didRender = true;
+  });
+  if (didRender) needsRender = false;
+  return didRender;
+}
 
 function circularDistance(index, center, length) {
   let distance = index - center;
@@ -210,9 +348,6 @@ function buildOrbCards() {
 
     const visual = document.createElement("span");
     visual.className = "orb-visual";
-    const canvas = document.createElement("canvas");
-    canvas.setAttribute("aria-hidden", "true");
-    visual.append(canvas);
 
     const label = document.createElement("span");
     label.className = "orb-label";
@@ -221,10 +356,14 @@ function buildOrbCards() {
     track.append(card);
     cards.push(card);
 
-    const renderer = new OrbRenderer(canvas, data, index);
-    renderers.push(renderer);
     card.addEventListener("click", () => selectOrb(index));
   });
+
+  for (let index = 0; index < Math.min(5, orbData.length); index += 1) {
+    const canvas = document.createElement("canvas");
+    canvas.setAttribute("aria-hidden", "true");
+    rendererPool.push(new OrbRenderer(canvas, orbData[index], index));
+  }
 
   rendererBadge.textContent = "webgl / hero glsl online";
 }
@@ -247,7 +386,32 @@ function updateMeta() {
   }));
 }
 
+function assignVisibleRenderers() {
+  renderers.fill(null);
+  rendererPool.forEach((renderer) => renderer.setVisible(false));
+
+  const visibleIndices = cards
+    .map((_, index) => index)
+    .filter((index) => Math.abs(circularDistance(index, selectedIndex, orbData.length)) <= 2)
+    .sort((first, second) => {
+      const firstDistance = Math.abs(circularDistance(first, selectedIndex, orbData.length));
+      const secondDistance = Math.abs(circularDistance(second, selectedIndex, orbData.length));
+      return firstDistance - secondDistance;
+    });
+
+  visibleIndices.forEach((index, poolIndex) => {
+    const renderer = rendererPool[poolIndex];
+    if (!renderer) return;
+    const visual = cards[index].querySelector(".orb-visual");
+    if (renderer.canvas.parentElement !== visual) visual.append(renderer.canvas);
+    renderer.setOrb(orbData[index], index);
+    renderer.setVisible(true);
+    renderers[index] = renderer;
+  });
+}
+
 function updateLayout() {
+  assignVisibleRenderers();
   cards.forEach((card, index) => {
     const distance = circularDistance(index, selectedIndex, orbData.length);
     const absoluteDistance = Math.abs(distance);
@@ -260,9 +424,14 @@ function updateLayout() {
     card.classList.toggle("is-center", absoluteDistance === 0);
     card.classList.toggle("is-near", absoluteDistance === 1);
     card.setAttribute("aria-selected", absoluteDistance === 0 ? "true" : "false");
-    renderers[index].setSelected(absoluteDistance === 0);
+    const renderer = renderers[index];
+    if (renderer) {
+      renderer.setSelected(absoluteDistance === 0);
+      renderer.setVisible(absoluteDistance <= 2);
+    }
   });
   updateMeta();
+  needsRender = true;
 }
 
 function selectOrb(index) {
@@ -276,7 +445,8 @@ function shiftOrb(amount) {
 
 function randomizeSeeds() {
   seedOffset = Math.random() * 1000;
-  renderers.forEach((renderer, index) => renderer.setSeed(seedOffset + index * 17.13 + 4.7));
+  rendererPool.forEach((renderer) => renderer.setSeed(seedOffset + renderer.index * 17.13 + 4.7));
+  needsRender = true;
 }
 
 previousButton.addEventListener("click", () => shiftOrb(-1));
@@ -285,12 +455,34 @@ shuffleButton.addEventListener("click", randomizeSeeds);
 pauseButton.addEventListener("click", () => {
   paused = !paused;
   pauseButton.textContent = paused ? "Resume field" : "Pause field";
+  needsRender = true;
+  resetPerformanceSample();
 });
 window.addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft") shiftOrb(-1);
   if (event.key === "ArrowRight") shiftOrb(1);
 });
-window.addEventListener("resize", () => renderers.forEach((renderer) => renderer.resize()));
+window.addEventListener("resize", () => {
+  rendererPool.forEach((renderer) => renderer.resize());
+  needsRender = true;
+  resetPerformanceSample();
+});
+
+document.addEventListener("visibilitychange", () => {
+  needsRender = true;
+  resetPerformanceSample();
+});
+
+if (orbStage && "IntersectionObserver" in window) {
+  const stageObserver = new IntersectionObserver((entries) => {
+    stageInView = entries.some((entry) => entry.isIntersecting);
+    if (stageInView) {
+      needsRender = true;
+      resetPerformanceSample();
+    }
+  }, { threshold: 0.01 });
+  stageObserver.observe(orbStage);
+}
 
 buildOrbCards();
 updateLayout();
@@ -299,7 +491,9 @@ pauseButton.textContent = paused ? "Resume field" : "Pause field";
 let lastTime = 0;
 function frame(now) {
   if (!paused) lastTime = now * 0.001;
-  renderers.forEach((renderer) => renderer.render(lastTime));
+  const shouldRender = stageInView && !document.hidden && (!paused || needsRender);
+  const didRender = shouldRender ? renderVisibleOrbs(lastTime) : false;
+  updateAdaptiveQuality(now, didRender && !paused);
   window.requestAnimationFrame(frame);
 }
 
