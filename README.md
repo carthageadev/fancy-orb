@@ -17,7 +17,6 @@ python -m http.server 4173
 
 Then open <http://localhost:4173>.
 
-Opening `index.html` directly may work in some browsers, but a local server is the reliable route for module scripts and WebGL testing.
 
 ## Rendering notes
 
@@ -30,4 +29,4 @@ Opening `index.html` directly may work in some browsers, but a local server is t
 
 ## Reference inspection
 
-The carousel UI is local to this folder; the hero GLSL source is kept verbatim as inspectable text in `high-quality-shaders.js`, with the renderer wiring in `main.js`.
+The carousel UI is local to this folder; the hero GLSL is in `high-quality-shaders.js`, with the renderer wiring in `main.js`.
