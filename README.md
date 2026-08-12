@@ -25,7 +25,7 @@ Then open <http://localhost:4173>.
 - The hero fragment shader reconstructs a dual-layer glass sphere, deterministic galaxy starfields, nebula pockets, Fresnel lighting, and a refracted back wall.
 - Its in-shader lens evaluates separate RGB offsets at the rim for the chromatic dispersion effect; the CSS layer only adds a restrained highlight.
 - Aster and Vesper use a subdued star census so their static pinpoints stay readable without competing with the animated shooting-light accents.
-- WebGL is required; there is deliberately no CSS or image fallback so the result stays a real shader study.
+- WebGL is required (obviously) there is deliberately no CSS or image fallback, we are here for shaders
 
 ## Reference inspection
 
