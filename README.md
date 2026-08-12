@@ -1,6 +1,11 @@
+<div align="center">
+  <img width="1200" alt="Banner" src="banner.webp" />
+</div>
+
+
 # orb-of-fate
 
-An original, dependency-free WebGL / GLSL ES 1.00 study of a glassy star-orb carousel.
+An original, dependency-free* WebGL / GLSL ES 1.00 study of a glassy star-orb carousel.
 
 ## Run it
 
