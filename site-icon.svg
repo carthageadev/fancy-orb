@@ -1,19 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-labelledby="title desc">
-  <title id="title">Orb of Fate mark</title>
   <defs>
     <radialGradient id="orb" cx="34%" cy="26%" r="76%">
-      <stop offset="0" stop-color="#253554" />
-      <stop offset="0" stop-color="#0d1424" />
-      <stop offset="0" stop-color="#02040a" />
+      <stop offset="0%" stop-color="#253554" />
+      <stop offset="52%" stop-color="#0d1424" />
+      <stop offset="100%" stop-color="#02040a" />
     </radialGradient>
     <linearGradient id="rim" x1="8%" y1="12%" x2="92%" y2="88%">
-      <stop offset="0" stop-color="#7fe8ff" />
-      <stop offset="0.42" stop-color="#718bff" />
-      <stop offset="0.7" stop-color="#f39cff" />
-      <stop offset="1" stop-color="#ffd48a" />
+      <stop offset="0%" stop-color="#7fe8ff" />
+      <stop offset="42%" stop-color="#718bff" />
+      <stop offset="70%" stop-color="#f39cff" />
+      <stop offset="100%" stop-color="#ffd48a" />
     </linearGradient>
   </defs>
-  <path d="M18.2 19.4c4.8-5.1 11.2-7.5 17.8-6.6" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round" opacity="0.5" />
-  <path d="M24 21.5l1.7 4.1 4.1 1.7-4.1 1.7-1.7 4.1-1.7-4.1-4.1-1.7 4.1-1.7z" fill="#fff" />
-  <circle cx="41" cy="40" r="1.15" fill="#fff" opacity="0.82" />
+  <title id="title">Orb of Fate mark</title>
+  <desc id="desc">A simple glass orb with a star glint and spectral rim.</desc>
+  <circle id="orb-body" cx="32" cy="32" r="23" fill="#27272a" stroke="#111827" stroke-width="2" />
+  <circle id="spectral-rim" cx="32" cy="32" r="22.2" fill="none" stroke="url(#rim)" stroke-width="2.8" />
 </svg>
