@@ -26,26 +26,26 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
 }
 
 struct U {
-  uRes: vec2f,
+  res: vec2f,
   _p0: vec2f,
-  uBg: vec3f,
+  bg: vec3f,
   _p1: f32,
-  uAnchor: vec3f,
+  anchor: vec3f,
   _p2: f32,
-  uC0: vec3f,
+  c0: vec3f,
   _p3: f32,
-  uC1: vec3f,
+  c1: vec3f,
   _p4: f32,
-  uC2: vec3f,
+  c2: vec3f,
   _p5: f32,
-  uTime: f32,
-  uPhase: f32,
-  uAudio: f32,
-  uSpin: f32,
-  uArch: f32,
-  uLens: f32,
-  uStarDensity: f32,
-  uFidelity: f32,
+  time: f32,
+  phase: f32,
+  audio: f32,
+  spin: f32,
+  arch: f32,
+  lens: f32,
+  starDensity: f32,
+  fidelity: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -220,12 +220,15 @@ fn starfield(n: vec3f, t: f32) -> vec4f {
 fn sphereAt(n0: vec3f, spin: f32, t: f32) -> vec4f {
   var n = n0;
   let roll = t * 0.13; // roll around the view axis
-  let cr = cos(roll), sr = sin(roll);
+  let cr = cos(roll);
+  let sr = sin(roll);
   n = vec3f(cr * n.x - sr * n.y, sr * n.x + cr * n.y, n.z);
   let tilt = 0.45 + 0.35 * sin(t * 0.24); // precessing axis
-  let cx = cos(tilt), sx = sin(tilt);
+  let cx = cos(tilt);
+  let sx = sin(tilt);
   n = vec3f(n.x, cx * n.y - sx * n.z, sx * n.y + cx * n.z);
-  let cs = cos(spin), ss = sin(spin);
+  let cs = cos(spin);
+  let ss = sin(spin);
   n = vec3f(cs * n.x + ss * n.z, n.y, -ss * n.x + cs * n.z);
   return starfield(n, t);
 }

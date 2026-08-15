@@ -463,25 +463,28 @@ let rendererInitializationFailed = false;
 let gpuEngine = null;
 
 async function initializeRenderers() {
+  const forceWebGL = new URLSearchParams(window.location.search).has("forceWebGL");
   const { initWebGPU, WebGPUOrbRenderer } = await import("./webgpu-engine.js");
-  gpuEngine = await initWebGPU();
-  if (gpuEngine) {
-    gpuEngine.compactQuery = compactDeviceQuery;
-    gpuEngine.compactMaxDpr = 1.25;
-    try {
-      await gpuEngine.initialize();
-      for (let index = 0; index < maxRendererPoolSize; index += 1) {
-        const canvas = document.createElement("canvas");
-        canvas.setAttribute("aria-hidden", "true");
-        rendererPool.push(new WebGPUOrbRenderer(gpuEngine, canvas, orbData[index], index));
+  if (!forceWebGL) {
+    gpuEngine = await initWebGPU();
+    if (gpuEngine) {
+      gpuEngine.compactQuery = compactDeviceQuery;
+      gpuEngine.compactMaxDpr = 1.25;
+      try {
+        await gpuEngine.initialize();
+        for (let index = 0; index < maxRendererPoolSize; index += 1) {
+          const canvas = document.createElement("canvas");
+          canvas.setAttribute("aria-hidden", "true");
+          rendererPool.push(new WebGPUOrbRenderer(gpuEngine, canvas, orbData[index], index));
+        }
+        rendererBadge.textContent = "webgpu / hero wgsl online";
+        updateLayout();
+        return;
+      } catch (error) {
+        console.error("WebGPU initialization failed; falling back to WebGL.", error);
+        gpuEngine.destroy?.();
+        gpuEngine = null;
       }
-      rendererBadge.textContent = "webgpu / hero wgsl online";
-      updateLayout();
-      return;
-    } catch (error) {
-      console.error("WebGPU initialization failed; falling back to WebGL.", error);
-      gpuEngine.destroy?.();
-      gpuEngine = null;
     }
   }
   initializeRendererPool();

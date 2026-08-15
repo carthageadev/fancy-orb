@@ -167,6 +167,25 @@ export class WebGPUEngine {
   }
 }
 
+export async function initWebGPU() {
+  if (!navigator.gpu) return null;
+  let adapter;
+  try {
+    adapter = await navigator.gpu.requestAdapter();
+  } catch {
+    return null;
+  }
+  if (!adapter) return null;
+  let device;
+  try {
+    device = await adapter.requestDevice();
+  } catch {
+    return null;
+  }
+  if (!device) return null;
+  return new WebGPUEngine(device, navigator.gpu.getPreferredCanvasFormat());
+}
+
 export class WebGPUOrbRenderer {
   constructor(engine, canvas, data, index) {
     this.engine = engine;
