@@ -31,7 +31,7 @@ const FAST_STREAK = 30;     // frames of headroom before climbing
 const EMA_ALPHA = 0.1;      // frame-time smoothing
 
 export class QualityManager {
-  constructor({ onLevelChange, compact = false }) {
+  constructor({ onLevelChange, compact = false, warmupMs = 1500 } = {}) {
     this.levels = QUALITY_LEVELS;
     // compact/coarse-pointer devices start one rung lower than desktop
     this.index = compact ? this.levels.length - 2 : this.levels.length - 1;
@@ -40,6 +40,8 @@ export class QualityManager {
     this.slowStreak = 0;
     this.fastStreak = 0;
     this.onLevelChange = onLevelChange ?? (() => {});
+    this.warmupMs = warmupMs;
+    this.armedAt = performance.now() + warmupMs;
   }
 
   get scale() {
@@ -68,9 +70,11 @@ export class QualityManager {
     this.reset();
   }
 
-  // frameMs: time between the last two animation frames.
+  // frameMs: time between the last two animation frames. Ignored during the
+  // warmup window so startup jank (shader compile, GPU warmup) can never
+  // drop the ladder before the app is actually running.
   sample(frameMs) {
-    if (!this.enabled) return;
+    if (!this.enabled || performance.now() < this.armedAt) return;
     this.emaMs = this.emaMs * (1 - EMA_ALPHA) + frameMs * EMA_ALPHA;
 
     if (this.emaMs > SLOW_EMA_MS) {
@@ -99,5 +103,6 @@ export class QualityManager {
     this.emaMs = 16.7;
     this.slowStreak = 0;
     this.fastStreak = 0;
+    this.armedAt = performance.now() + this.warmupMs;
   }
 }

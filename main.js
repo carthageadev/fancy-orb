@@ -117,7 +117,7 @@ function createWebGLContext(canvas) {
     antialias: true,
     depth: false,
     premultipliedAlpha: false,
-    preserveDrawingBuffer: false,
+    preserveDrawingBuffer: new URLSearchParams(window.location.search).has("readback"),
     powerPreference: "default"
   };
   return canvas.getContext("webgl", attributes) || canvas.getContext("experimental-webgl", attributes);
@@ -604,7 +604,9 @@ pauseButton.textContent = paused ? "Resume field" : "Pause field";
 let lastTime = 0;
 let lastFrameNow = 0;
 function frame(now) {
-  if (!paused) lastTime = now * 0.001;
+  if (!paused) {
+    lastTime = typeof window.__orbFreezeTime === "number" ? window.__orbFreezeTime : now * 0.001;
+  }
   const frameMs = lastFrameNow ? now - lastFrameNow : 16.7;
   lastFrameNow = now;
   const shouldRender = stageInView && !document.hidden && (!paused || needsRender);

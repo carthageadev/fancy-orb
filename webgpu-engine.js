@@ -137,7 +137,8 @@ export class WebGPUEngine {
       }),
       vertex: { module: shaderModule, entryPoint: "vs_main" },
       fragment: { module: shaderModule, entryPoint: "fs_main", targets: [{ format: this.format }] },
-      primitive: { topology: "triangle-list" }
+      primitive: { topology: "triangle-list" },
+      multisample: { count: 4 } // matches the WebGL context's antialias:true
     });
 
     this.slotCount = Math.floor(this.uniformData.length / (UNIFORM_SLOT_ALIGN / 4));
@@ -226,6 +227,7 @@ export class WebGPUOrbRenderer {
     this.lastWidth = 0;
     this.lastHeight = 0;
     this.bindGroup = null;
+    this.msaaTexture = null;
   }
 
   setOrb(data, index) {
@@ -282,6 +284,13 @@ export class WebGPUOrbRenderer {
     this.canvas.height = height;
     this.lastWidth = width;
     this.lastHeight = height;
+    this.msaaTexture?.destroy();
+    this.msaaTexture = this.engine.device.createTexture({
+      size: [width, height],
+      format: this.engine.format,
+      sampleCount: 4,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT
+    });
   }
 
   render(time) {
@@ -321,10 +330,11 @@ export class WebGPUOrbRenderer {
     const encoder = engine.encoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
-        view: this.ctx.getCurrentTexture().createView(),
+        view: this.msaaTexture.createView(),
+        resolveTarget: this.ctx.getCurrentTexture().createView(),
         clearValue: { r: 0, g: 0, b: 0, a: 1 },
         loadOp: "clear",
-        storeOp: "store"
+        storeOp: "discard"
       }]
     });
     pass.setPipeline(engine.pipeline);
@@ -339,6 +349,8 @@ export class WebGPUOrbRenderer {
   destroy() {
     this.engine.failed = true;
     this.bindGroup = null;
+    this.msaaTexture?.destroy();
+    this.msaaTexture = null;
     try {
       this.ctx.unconfigure();
     } catch {

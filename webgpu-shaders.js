@@ -18,7 +18,7 @@ struct VSOut {
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
   var uv = array<vec2f, 3>(vec2f(0.0, 0.0), vec2f(2.0, 0.0), vec2f(0.0, 2.0));
-  var pos = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  var pos = array<vec2f, 3>(vec2f(-1.0, 1.0), vec2f(3.0, 1.0), vec2f(-1.0, -3.0));
   var out: VSOut;
   out.pos = vec4f(pos[vi], 0.0, 1.0);
   out.vUV = uv[vi];

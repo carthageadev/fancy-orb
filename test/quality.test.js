@@ -2,21 +2,33 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { QualityManager, QUALITY_LEVELS, RESOLUTION_MODES, FIDELITY_MODES } from "../quality.js";
 
+function makeManager(options = {}) {
+  return new QualityManager({ warmupMs: 0, ...options });
+}
+
 test("desktop starts at the top rung (100%)", () => {
-  const manager = new QualityManager({});
+  const manager = makeManager();
   assert.equal(manager.scale, 1);
   assert.equal(manager.label, "100%");
   assert.equal(manager.enabled, true);
 });
 
 test("compact devices start one rung lower", () => {
-  const manager = new QualityManager({ compact: true });
+  const manager = makeManager({ compact: true });
   assert.equal(manager.scale, 0.86);
+});
+
+test("warmup window suppresses sampling so startup jank never drops the ladder", () => {
+  const changes = [];
+  const manager = new QualityManager({ onLevelChange: (scale) => changes.push(scale) });
+  for (let index = 0; index < 40; index += 1) manager.sample(60);
+  assert.deepEqual(changes, [], "no ladder movement before warmup elapses");
+  assert.equal(manager.scale, 1);
 });
 
 test("sustained slow frames drop one rung at a time", () => {
   const changes = [];
-  const manager = new QualityManager({ onLevelChange: (scale) => changes.push(scale) });
+  const manager = makeManager({ onLevelChange: (scale) => changes.push(scale) });
   for (let index = 0; index < 12; index += 1) manager.sample(40); // EMA needs ~4 frames to cross 22ms
   assert.deepEqual(changes, [0.86]);
   for (let index = 0; index < 8; index += 1) manager.sample(40);
@@ -25,7 +37,7 @@ test("sustained slow frames drop one rung at a time", () => {
 
 test("a fast frame breaks the slow streak (hysteresis)", () => {
   const changes = [];
-  const manager = new QualityManager({ onLevelChange: (scale) => changes.push(scale) });
+  const manager = makeManager({ onLevelChange: (scale) => changes.push(scale) });
   for (let index = 0; index < 7; index += 1) manager.sample(40);
   manager.sample(8);
   for (let index = 0; index < 7; index += 1) manager.sample(40);
@@ -34,7 +46,7 @@ test("a fast frame breaks the slow streak (hysteresis)", () => {
 
 test("sustained headroom climbs back up", () => {
   const changes = [];
-  const manager = new QualityManager({ onLevelChange: (scale) => changes.push(scale) });
+  const manager = makeManager({ onLevelChange: (scale) => changes.push(scale) });
   manager.setLevel(1);
   assert.deepEqual(changes, [0.58]);
   for (let index = 0; index < 30; index += 1) manager.sample(8);
@@ -43,7 +55,7 @@ test("sustained headroom climbs back up", () => {
 });
 
 test("manual modes pin a rung and disable auto-walking", () => {
-  const manager = new QualityManager({});
+  const manager = makeManager();
   manager.setMode("low");
   assert.equal(manager.scale, QUALITY_LEVELS[RESOLUTION_MODES.low]);
   assert.equal(manager.scale, 0.58);
@@ -53,7 +65,7 @@ test("manual modes pin a rung and disable auto-walking", () => {
 });
 
 test("auto mode returns to the top rung and re-enables", () => {
-  const manager = new QualityManager({});
+  const manager = makeManager();
   manager.setMode("high");
   manager.setMode("auto");
   assert.equal(manager.scale, 1);
@@ -61,7 +73,7 @@ test("auto mode returns to the top rung and re-enables", () => {
 });
 
 test("the ladder never leaves its bounds", () => {
-  const manager = new QualityManager({ compact: true });
+  const manager = makeManager({ compact: true });
   for (let index = 0; index < 200; index += 1) manager.sample(60);
   assert.equal(manager.scale, 0.5, "must bottom out at the lowest rung");
   for (let index = 0; index < 600; index += 1) manager.sample(6);
