@@ -146,14 +146,18 @@ export class WebGPUEngine {
 
     // Pipeline creation is validated asynchronously on some implementations
     // (Chrome reports validation errors via error scopes, not sync throws).
-    // Where error scopes are supported, capture validation failures so a bad
-    // pipeline falls back to WebGL instead of limping along. The existing
-    // shader compilation-info check above is preserved.
+    // Prefer createRenderPipelineAsync where available: it compiles the
+    // pipeline off the main thread, so the first frames don't stall on shader
+    // compilation (the main WebGPU startup hitch). Older implementations fall
+    // back to the synchronous createRenderPipeline. The error-scope window
+    // spans the (possibly async) creation, so validation failures are still
+    // captured and a bad pipeline falls back to WebGL instead of limping
+    // along. The existing shader compilation-info check above is preserved.
     const hasErrorScopes = typeof this.device.pushErrorScope === "function"
       && typeof this.device.popErrorScope === "function";
     if (hasErrorScopes) this.device.pushErrorScope("validation");
     try {
-      this.pipeline = this.device.createRenderPipeline({
+      this.pipeline = await createRenderPipeline(this.device, {
         layout: this.device.createPipelineLayout({
           bindGroupLayouts: [this.bindGroupLayout]
         }),
@@ -236,6 +240,19 @@ export function withTimeout(promise, ms) {
       }
     );
   });
+}
+
+// Pipeline-factory selection for WebGPUEngine.initialize(). Async creation is
+// preferred when the device implements it: the pipeline compiles off the main
+// thread, shrinking the startup hitch on the first frames. Older
+// implementations fall back to the synchronous createRenderPipeline. Pure
+// helper — it takes a device-like object and a descriptor, so the unit tests
+// can drive selection with stubs and no real WebGPU implementation is needed.
+export function createRenderPipeline(device, descriptor) {
+  if (typeof device.createRenderPipelineAsync === "function") {
+    return device.createRenderPipelineAsync(descriptor);
+  }
+  return Promise.resolve().then(() => device.createRenderPipeline(descriptor));
 }
 
 export async function initWebGPU() {

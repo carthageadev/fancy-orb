@@ -5,16 +5,25 @@
 // weak devices), sustained headroom climbs back up. Manual modes pin a fixed
 // rung; auto mode (default) walks freely.
 //
+// Compact/coarse-pointer devices begin at exactly 70% backing resolution —
+// the 0.7 rung, two below the desktop start — so weak mobile GPUs pay for
+// fewer pixels up front. Auto mode still adapts from there after the warmup
+// window.
+//
 // Both renderers (WebGL and WebGPU) implement setQualityScale(scale) and
 // setFidelity(value), so the manager drives both stacks identically.
 
-export const QUALITY_LEVELS = [0.5, 0.58, 0.72, 0.86, 1];
+export const QUALITY_LEVELS = [0.5, 0.58, 0.7, 0.84, 1];
+
+// Compact/coarse-pointer devices start on exactly this rung (70%). It is a
+// real ladder rung, so auto mode can walk either direction from it.
+export const COMPACT_SCALE = 0.7;
 
 // Manual-mode rungs (labels preserved from the original settings UI).
 export const RESOLUTION_MODES = {
   low: 1,      // 58%
-  balanced: 2, // 72%
-  high: 3,     // 86%
+  balanced: 2, // 70%
+  high: 3,     // 84%
   full: 4      // 100%
 };
 
@@ -33,8 +42,9 @@ const EMA_ALPHA = 0.1;      // frame-time smoothing
 export class QualityManager {
   constructor({ onLevelChange, compact = false, warmupMs = 1500 } = {}) {
     this.levels = QUALITY_LEVELS;
-    // compact/coarse-pointer devices start one rung lower than desktop
-    this.index = compact ? this.levels.length - 2 : this.levels.length - 1;
+    // compact/coarse-pointer devices begin at the exact 70% rung (two below
+    // the desktop start); full-size devices begin at the top rung.
+    this.index = compact ? this.levels.indexOf(COMPACT_SCALE) : this.levels.length - 1;
     this.enabled = true;
     this.emaMs = 16.7;
     this.slowStreak = 0;

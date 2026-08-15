@@ -622,7 +622,10 @@ function scheduleRendererWork(callback) {
     if (typeof window.requestIdleCallback === "function") {
       window.requestIdleCallback(callback, { timeout: 350 });
     } else {
-      callback();
+      // Safari and older mobile browsers may not expose requestIdleCallback.
+      // Yield out of the animation frame before compiling the next GLSL
+      // program so the first paint is never blocked by shader compilation.
+      window.setTimeout(callback, 0);
     }
   });
 }

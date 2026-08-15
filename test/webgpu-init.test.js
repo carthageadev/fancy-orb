@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { withTimeout } from "../webgpu-engine.js";
+import { withTimeout, createRenderPipeline } from "../webgpu-engine.js";
 
 // withTimeout is the bounded-settle helper used by initWebGPU so a wedged or
-// unsupported navigator.gpu.requestAdapter()/requestDevice() falls back to
-// WebGL instead of hanging the page. These tests run without browser globals.
+// unsupported navigator.gpu.requestAdapter()/requestDevice() reports WebGPU
+// unavailable instead of hanging the page. These tests run without browser globals.
 
 test("withTimeout resolves with the promise value when it settles in time", async () => {
   const result = await withTimeout(Promise.resolve(42), 1000);
@@ -29,4 +29,63 @@ test("a value arriving after the timeout does not override the null result", asy
   });
   const result = await withTimeout(neverSettles, 20);
   assert.equal(result, null, "late settlement must be ignored after timeout");
+});
+
+// createRenderPipeline is the pipeline-factory selector used by
+// WebGPUEngine.initialize(). It prefers the async factory (compiles off the
+// main thread, the startup-hitch fix) and falls back to the synchronous one
+// for older implementations. The stubs below are plain objects exposing only
+// the two factory methods — no real WebGPU implementation is faked.
+
+test("createRenderPipeline prefers createRenderPipelineAsync when available", async () => {
+  const pipeline = { label: "async pipeline" };
+  const descriptor = { label: "hero" };
+  const asyncDevice = {
+    createRenderPipelineAsync(input) {
+      return Promise.resolve({ input, pipeline });
+    }
+  };
+  const result = await createRenderPipeline(asyncDevice, descriptor);
+  assert.equal(result.pipeline, pipeline);
+  assert.equal(result.input, descriptor, "descriptor must be forwarded untouched");
+});
+
+test("createRenderPipeline never touches the sync factory when async exists", async () => {
+  let syncCalls = 0;
+  const device = {
+    createRenderPipeline() {
+      syncCalls += 1;
+      throw new Error("sync factory must not be called");
+    },
+    createRenderPipelineAsync() {
+      return Promise.resolve("async result");
+    }
+  };
+  const result = await createRenderPipeline(device, {});
+  assert.equal(result, "async result");
+  assert.equal(syncCalls, 0);
+});
+
+test("createRenderPipeline falls back to the synchronous factory on older devices", async () => {
+  const pipeline = { label: "sync pipeline" };
+  const descriptor = { label: "hero" };
+  const syncCalls = [];
+  const syncDevice = {
+    createRenderPipeline(input) {
+      syncCalls.push(input);
+      return pipeline;
+    }
+  };
+  const result = await createRenderPipeline(syncDevice, descriptor);
+  assert.equal(result, pipeline);
+  assert.deepEqual(syncCalls, [descriptor], "descriptor must be forwarded untouched");
+});
+
+test("createRenderPipeline surfaces a sync fallback failure as a rejection", async () => {
+  const syncDevice = {
+    createRenderPipeline() {
+      throw new Error("sync creation failed");
+    }
+  };
+  await assert.rejects(createRenderPipeline(syncDevice, {}), /sync creation failed/);
 });

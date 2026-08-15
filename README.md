@@ -43,22 +43,24 @@ restrained highlight.
 
 ## Compatibility
 
-WebGPU is opportunistic, not required. The app uses it only when the browser
-exposes `navigator.gpu`, an adapter and device arrive within the bounded init
-window, and the WGSL pipeline validates successfully. Chrome, Edge, Safari,
-and Firefox implementations that do not meet those conditions automatically
-use the WebGL 1 renderer instead, including mobile and insecure-context cases.
+WebGPU is optional. With no saved preference, the app selects WebGPU only when
+the browser exposes `navigator.gpu`; otherwise it starts WebGL 1. The renderer
+control lets you switch explicitly and persists the choice. A requested
+WebGPU mode that is unavailable, loses its device, or fails validation does
+not silently switch back: the badge reports the state and the control lets
+you choose WebGL. This keeps Chrome, Edge, Safari, Firefox, mobile, and
+insecure-context behavior testable without hiding which backend is active.
 
-The same fallback also runs after a WebGPU device loss or uncaptured GPU
-validation error. No optional WebGPU features are requested, and the shader
-uses core WGSL constructs only.
+No optional WebGPU features are requested, and the shader uses core WGSL
+constructs only.
 
 ## Adaptive quality
 
 `quality.js` samples per-frame time, smooths it with an EMA, and walks a
 resolution ladder: sustained lag drops a rung (down to 50% on weak devices),
 sustained headroom climbs back to 100%. Manual modes pin a fixed rung;
-compact/coarse-pointer devices start one rung lower. Both renderers expose
+compact/coarse-pointer devices start at the 70% rung, and auto mode adapts
+from there after the warmup window. Both renderers expose
 `setQualityScale()` and `setFidelity()`, so the manager drives either stack
 identically.
 
@@ -70,9 +72,9 @@ node test/smoke.mjs            # end-to-end: real headless Chrome, badge online
 ```
 
 The smoke test spawns its own throwaway headless Chrome (temp profile, never
-your real browser) and polls until either the WebGPU or the WebGL stack
-comes online. Set `SMOKE_URL` for another port, `CHROME_PATH` for another
-Chrome.
+your real browser), waits for the selected stack, and manually switches to
+WebGL when the explicitly requested WebGPU mode is unavailable. Set
+`SMOKE_URL` for another port, `CHROME_PATH` for another Chrome.
 
 ## Rendering notes
 
