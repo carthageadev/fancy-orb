@@ -655,7 +655,25 @@ function frame(now) {
   const didRender = shouldRender ? renderVisibleOrbs(lastTime) : false;
   if (didRender) gpuEngine?.endFrame();
   updateAdaptiveQuality(now, didRender && !paused);
-  window.requestAnimationFrame(frame);
+window.requestAnimationFrame(frame);
+
+window.__orbDebug = () => ({
+  stack: gpuEngine ? "webgpu" : "webgl",
+  badge: rendererBadge.textContent,
+  renderers: rendererPool.map((renderer) => ({
+    seed: renderer.seed?.toFixed(3),
+    phase: renderer.phase?.toFixed(3),
+    spin: renderer.spin?.toFixed(3),
+    audio: renderer.audio,
+    visible: renderer.visible,
+    canvas: [renderer.canvas?.width, renderer.canvas?.height]
+  })),
+  gpu: gpuEngine
+    ? { format: gpuEngine.format, renderPasses: gpuEngine.renderPasses, failed: gpuEngine.failed }
+    : null,
+  qualityLevel: qualityLevels[qualityLevelIndex],
+  fidelity: fidelityValue
+});
 }
 
 window.requestAnimationFrame(frame);
