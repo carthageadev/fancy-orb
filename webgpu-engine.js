@@ -13,6 +13,7 @@
 //   initWebGPU() returns an engine or null; callers fall back to WebGL.
 
 import { buildOrbSpec, specFromSeed } from "./orb-spec.js";
+import { HERO_WGSL } from "./webgpu-shaders.js";
 
 export const UNIFORM_SLOT_ALIGN = 256; // dynamic offsets must align to device limit (usually 256)
 export const UNIFORM_BYTES = 128;
@@ -139,53 +140,7 @@ export class WebGPUEngine {
   }
 
   async buildShaderSource() {
-    // M1: minimal clear pass; replaced by the hero WGSL in the next milestone.
-    return `
-struct VSOut {
-  @builtin(position) pos: vec4f,
-  @location(0) vUV: vec2f,
-};
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
-  var uv = array<vec2f, 3>(vec2f(0.0, 0.0), vec2f(2.0, 0.0), vec2f(0.0, 2.0));
-  var pos = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
-  var out: VSOut;
-  out.pos = vec4f(pos[vi], 0.0, 1.0);
-  out.vUV = uv[vi];
-  return out;
-}
-
-struct U {
-  uRes: vec2f,
-  _p0: vec2f,
-  uBg: vec3f,
-  _p1: f32,
-  uAnchor: vec3f,
-  _p2: f32,
-  uC0: vec3f,
-  _p3: f32,
-  uC1: vec3f,
-  _p4: f32,
-  uC2: vec3f,
-  _p5: f32,
-  uTime: f32,
-  uPhase: f32,
-  uAudio: f32,
-  uSpin: f32,
-  uArch: f32,
-  uLens: f32,
-  uStarDensity: f32,
-  uFidelity: f32,
-};
-
-@group(0) @binding(0) var<uniform> u: U;
-
-@fragment
-fn fs_main(@location(0) vUV: vec2f) -> @location(0) vec4f {
-  return vec4f(u.uBg, 1.0);
-}
-`;
+    return HERO_WGSL;
   }
 
   // Batch: one encoder per frame, shared by every visible orb render pass,
@@ -288,9 +243,9 @@ export class WebGPUOrbRenderer {
     this.fidelity = value;
   }
 
-  resize(compactDeviceQuery, maxPixelRatioForCompact) {
-    const isCompact = compactDeviceQuery.matches;
-    const maxPixelRatio = isCompact ? maxPixelRatioForCompact : 1.75;
+  resize() {
+    const isCompact = this.engine.compactQuery?.matches ?? false;
+    const maxPixelRatio = isCompact ? (this.engine.compactMaxDpr ?? 1.25) : 1.75;
     const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio) * this.qualityScale;
     const width = Math.max(1, Math.round(this.canvas.clientWidth * pixelRatio));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * pixelRatio));
@@ -303,7 +258,7 @@ export class WebGPUOrbRenderer {
 
   render(time) {
     if (!this.visible) return false;
-    this.resize(this.engine.compactQuery, this.engine.compactMaxDpr);
+    this.resize();
 
     const engine = this.engine;
     const view = engine.getUniformView(this.slot);
