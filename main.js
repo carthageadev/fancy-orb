@@ -405,6 +405,15 @@ const maxRendererPoolSize = Math.min(5, orbData.length);
 let rendererInitializationFailed = false;
 let gpuEngine = null;
 
+function fallbackToWebGL(reason) {
+  console.warn("Switching to WebGL render path:", reason);
+  rendererPool.forEach((renderer) => renderer.destroy?.());
+  rendererPool.length = 0;
+  gpuEngine = null;
+  needsRender = true;
+  initializeRendererPool();
+}
+
 async function initializeRenderers() {
   const forceWebGL = new URLSearchParams(window.location.search).has("forceWebGL");
   const { initWebGPU, WebGPUOrbRenderer } = await import("./webgpu-engine.js");
@@ -420,6 +429,7 @@ async function initializeRenderers() {
           canvas.setAttribute("aria-hidden", "true");
           rendererPool.push(new WebGPUOrbRenderer(gpuEngine, canvas, orbData[index], index));
         }
+        gpuEngine.onLost = () => fallbackToWebGL("device lost");
         rendererBadge.textContent = "webgpu / hero wgsl online";
         updateLayout();
         return;
@@ -623,6 +633,7 @@ window.__orbDebug = () => ({
         failed: gpuEngine.failed
       }
     : null,
+  engine: gpuEngine,
   quality: {
     enabled: quality.enabled,
     scale: quality.scale,

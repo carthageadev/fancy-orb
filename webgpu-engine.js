@@ -81,10 +81,12 @@ export class WebGPUEngine {
     this.failed = false;
     this.renderPasses = 0; // frames * passes, for the debug badge / smoke tests
     this.frameSubmissions = 0; // actual queue submissions (batched: 1/frame)
+    this.onLost = null; // set by the app: called once when the device dies
 
     device.lost.then((info) => {
       this.failed = true;
       console.warn("WebGPU device lost:", info.message);
+      this.onLost?.(info);
     });
 
     this.uniformData = new Float32Array(8 * (UNIFORM_SLOT_ALIGN / 4)); // 8 slots max
@@ -103,6 +105,7 @@ export class WebGPUEngine {
   }
 
   flushUniforms() {
+    if (this.failed) return;
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
   }
 
@@ -154,9 +157,13 @@ export class WebGPUEngine {
   }
 
   endFrame() {
-    if (!this.frameEncoder) return;
-    this.device.queue.submit([this.frameEncoder.finish()]);
-    this.frameSubmissions += 1;
+    if (!this.frameEncoder || this.failed) return;
+    try {
+      this.device.queue.submit([this.frameEncoder.finish()]);
+      this.frameSubmissions += 1;
+    } catch {
+      this.failed = true;
+    }
     this.frameEncoder = null;
   }
 
@@ -278,7 +285,7 @@ export class WebGPUOrbRenderer {
   }
 
   render(time) {
-    if (!this.visible) return false;
+    if (!this.visible || this.engine.failed) return false;
     this.resize();
 
     const engine = this.engine;
@@ -327,5 +334,16 @@ export class WebGPUOrbRenderer {
 
     engine.renderPasses += 1;
     return true;
+  }
+
+  destroy() {
+    this.engine.failed = true;
+    this.bindGroup = null;
+    try {
+      this.ctx.unconfigure();
+    } catch {
+      // context may already be gone after device loss
+    }
+    this.visible = false;
   }
 }
