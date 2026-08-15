@@ -166,6 +166,47 @@ a {
   box-shadow: 0 0 0 2px rgba(201, 216, 255, 0.14);
 }
 
+.render-mode-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  background: #0a0a0c;
+  color: #e8e6e2;
+  font: inherit;
+  text-align: left;
+  transition: border-color 180ms ease;
+}
+
+.render-mode-toggle:hover {
+  border-color: rgba(255, 255, 255, 0.27);
+}
+
+.render-mode-toggle:focus-visible {
+  border-color: rgba(201, 216, 255, 0.7);
+  box-shadow: 0 0 0 2px rgba(201, 216, 255, 0.14);
+  outline: 0;
+}
+
+.render-mode-current {
+  color: #e8e6e2;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.render-mode-switch {
+  color: #85838b;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .render-settings-note {
   margin: 10px 0 0;
   line-height: 1.45;

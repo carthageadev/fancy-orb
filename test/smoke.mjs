@@ -129,7 +129,13 @@ async function main() {
     await sleep(500);
     try {
       const result = await client.send("Runtime.evaluate", {
-        expression: "window.__orbDebug ? window.__orbDebug().badge : null",
+        expression: `(() => {
+          const debug = window.__orbDebug ? window.__orbDebug() : null;
+          if (debug?.badge?.includes("unavailable") && debug.mode?.requested === "webgpu") {
+            document.querySelector("#renderModeToggle")?.click();
+          }
+          return debug?.badge ?? null;
+        })()`,
         returnByValue: true
       });
       badge = result.result.value;

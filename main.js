@@ -160,6 +160,7 @@ class OrbRenderer {
     this.lastHeight = 0;
     this.visible = true;
     this.contextLost = false;
+    this.destroyed = false;
     this.qualityScale = quality.scale;
     this.fidelity = fidelityValue;
     this.setOrb(data, index);
@@ -167,22 +168,26 @@ class OrbRenderer {
     if (!this.gl) {
       throw new Error("WebGL is required for orb-of-fate; no CSS fallback is provided.");
     }
-    this.canvas.addEventListener("webglcontextlost", (event) => {
+    this.handleContextLost = (event) => {
       event.preventDefault();
       this.contextLost = true;
       needsRender = true;
-    }, { passive: false });
-    this.canvas.addEventListener("webglcontextrestored", () => {
+    };
+    this.handleContextRestored = () => {
+      if (this.destroyed) return;
       this.contextLost = false;
       this.initializeGpu();
       this.lastWidth = 0;
       this.lastHeight = 0;
       needsRender = true;
-    });
+    };
+    this.canvas.addEventListener("webglcontextlost", this.handleContextLost, { passive: false });
+    this.canvas.addEventListener("webglcontextrestored", this.handleContextRestored);
     this.initializeGpu();
   }
 
   initializeGpu() {
+    if (this.destroyed) return;
     const gl = this.gl;
     this.program = createProgram(gl);
     this.buffer = gl.createBuffer();
@@ -268,6 +273,7 @@ class OrbRenderer {
   }
 
   render(time) {
+    if (this.destroyed) return false;
     const contextLost = this.contextLost
       || (typeof this.gl.isContextLost === "function" && this.gl.isContextLost());
     if (contextLost) return false;
@@ -295,6 +301,21 @@ class OrbRenderer {
     gl.uniform1f(this.locations.fidelity, this.fidelity);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this.visible = false;
+    this.canvas.removeEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.removeEventListener("webglcontextrestored", this.handleContextRestored);
+    if (this.gl) {
+      if (this.program) this.gl.deleteProgram(this.program);
+      if (this.buffer) this.gl.deleteBuffer(this.buffer);
+    }
+    this.program = null;
+    this.buffer = null;
+    this.canvas.remove?.();
+    needsRender = true;
   }
 }
 
@@ -348,6 +369,9 @@ function setupRenderSettings() {
     applyFidelityMode(event.target.value);
   });
 
+  document.querySelector("#renderModeToggle")?.addEventListener("click", toggleRendererMode);
+  updateRendererModeControl();
+
   document.addEventListener("click", (event) => {
     if (renderSettings.hidden) return;
     if (!renderSettings.contains(event.target) && !brandSettingsToggle.contains(event.target)) {
@@ -398,72 +422,199 @@ function buildOrbCards() {
     card.addEventListener("click", () => selectOrb(index));
   });
 
-  rendererBadge.textContent = "webgl / loading shader";
+  rendererBadge.textContent = "initializing renderer";
 }
 
 const maxRendererPoolSize = Math.min(5, orbData.length);
 let rendererInitializationFailed = false;
 let gpuEngine = null;
-let fallbackInProgress = false;
 
-function fallbackToWebGL(reason) {
-  if (fallbackInProgress) return; // device loss + uncaptured error must fall back once
-  fallbackInProgress = true;
-  console.warn("Switching to WebGL render path:", reason);
-  const failedEngine = gpuEngine;
-  rendererPool.forEach((renderer) => renderer.destroy?.());
-  rendererPool.length = 0;
-  gpuEngine = null;
-  failedEngine?.destroy?.();
-  needsRender = true;
-  initializeRendererPool();
+// Explicit renderer mode selection. The requested mode is persisted under a
+// namespaced key (storage access is guarded — it can throw in private or
+// blocked-cookie contexts), while the active mode tracks which backend
+// actually has live renderers. `?forceWebGL` remains a session-only test
+// override and never overwrites the stored selection.
+const RENDER_MODE_STORAGE_KEY = "orb-of-fate-render-mode";
+let requestedMode = null;
+let activeMode = null;
+// Bumped on every switch; async init and progressive pool steps re-check it
+// so a stale initialization can never create duplicate pools or canvases
+// after a newer toggle.
+let rendererLifecycleToken = 0;
+
+function isRenderMode(value) {
+  return value === "webgpu" || value === "webgl";
 }
 
-async function initializeRenderers() {
-  const forceWebGL = new URLSearchParams(window.location.search).has("forceWebGL");
-  const { initWebGPU, WebGPUOrbRenderer } = await import("./webgpu-engine.js");
-  if (!forceWebGL) {
-    gpuEngine = await initWebGPU();
-    const engine = gpuEngine;
-    if (engine) {
-      engine.compactQuery = compactDeviceQuery;
-      engine.compactMaxDpr = 1.25;
-      // Wire the once-only loss/uncaptured-error fallback BEFORE init: an early
-      // device loss must fall back to WebGL instead of half-initializing.
-      engine.onLost = () => fallbackToWebGL("device lost");
-      let engineReady = false;
-      try {
-        if (!engine.failed) {
-          await engine.initialize();
-          engineReady = !engine.failed;
-        }
-      } catch (error) {
-        console.error("WebGPU initialization failed; falling back to WebGL.", error);
-      }
-      if (engineReady) {
-        try {
-          for (let index = 0; index < maxRendererPoolSize; index += 1) {
-            const canvas = document.createElement("canvas");
-            canvas.setAttribute("aria-hidden", "true");
-            rendererPool.push(new WebGPUOrbRenderer(engine, canvas, orbData[index], index));
-          }
-        } catch (error) {
-          console.error("WebGPU renderer creation failed; falling back to WebGL.", error);
-          engineReady = false;
-        }
-      }
-      if (engineReady) {
-        rendererBadge.textContent = "webgpu / hero wgsl online";
-        updateLayout();
-        return;
-      }
-      // No-op if the device died during init and onLost already dispatched
-      // the fallback; otherwise cleans up partial renderers and starts WebGL.
-      fallbackToWebGL(engine.failed ? "device lost during initialization" : "initialization failed");
+function otherRenderMode(mode) {
+  return mode === "webgpu" ? "webgl" : "webgpu";
+}
+
+function readStoredRenderMode() {
+  try {
+    const stored = window.localStorage.getItem(RENDER_MODE_STORAGE_KEY);
+    return isRenderMode(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredRenderMode(mode) {
+  if (!isRenderMode(mode)) return;
+  try {
+    window.localStorage.setItem(RENDER_MODE_STORAGE_KEY, mode);
+  } catch {
+    // storage unavailable — the selection still applies for this session
+  }
+}
+
+function hasForceWebGLOverride() {
+  return new URLSearchParams(window.location.search).has("forceWebGL");
+}
+
+function resolveDefaultRenderMode() {
+  if (hasForceWebGLOverride()) return "webgl";
+  const stored = readStoredRenderMode();
+  if (isRenderMode(stored)) return stored;
+  // No stored preference: prefer WebGPU only where it exists, so browsers
+  // without WebGPU still get a working WebGL renderer on first load.
+  return typeof navigator !== "undefined" && navigator.gpu ? "webgpu" : "webgl";
+}
+
+function updateRendererModeControl() {
+  const toggle = document.querySelector("#renderModeToggle");
+  if (!toggle) return;
+  const current = isRenderMode(requestedMode)
+    ? requestedMode
+    : (isRenderMode(activeMode) ? activeMode : "webgl");
+  const target = otherRenderMode(current);
+  const value = document.querySelector("#renderModeValue");
+  const action = document.querySelector("#renderModeSwitch");
+  if (value) value.textContent = current;
+  if (action) action.textContent = `switch to ${target}`;
+  toggle.setAttribute("aria-label", `Renderer: ${current}. Switch to ${target}.`);
+}
+
+function toggleRendererMode() {
+  const current = isRenderMode(requestedMode)
+    ? requestedMode
+    : (isRenderMode(activeMode) ? activeMode : "webgl");
+  switchRendererMode(otherRenderMode(current));
+}
+
+// Drop every live renderer (WebGL or WebGPU) plus the engine before a new
+// backend starts. Safe to call when nothing is running.
+function teardownRenderers() {
+  rendererPool.forEach((renderer) => renderer.destroy?.());
+  rendererPool.length = 0;
+  renderers.fill(null);
+  const engine = gpuEngine;
+  gpuEngine = null;
+  if (engine) {
+    engine.onLost = null;
+    engine.destroy?.();
+  }
+  activeMode = null;
+  needsRender = true;
+}
+
+function reportModeStatus(badgeText) {
+  rendererBadge.textContent = badgeText;
+  updateRendererModeControl();
+}
+
+// Device loss / uncaptured validation errors only stop the WebGPU backend and
+// report it; they never silently start the other backend. The user picks the
+// next mode from the render settings control.
+function handleWebGPUDeviceLost() {
+  if (activeMode !== "webgpu") return;
+  console.warn("WebGPU device lost; renderer stopped. Choose WebGL to continue.");
+  reportModeStatus("webgpu / device lost — choose WebGL");
+  teardownRenderers();
+}
+
+async function switchRendererMode(mode, options = {}) {
+  const normalized = isRenderMode(mode) ? mode : "webgl";
+  const token = ++rendererLifecycleToken;
+  requestedMode = normalized;
+  if (options.persist !== false) writeStoredRenderMode(normalized);
+  rendererInitializationFailed = false;
+  reportModeStatus(`${normalized} / switching…`);
+  teardownRenderers();
+  updateRendererModeControl();
+  updateLayout();
+  if (normalized === "webgpu") {
+    await initializeWebGPU(token);
+  } else {
+    initializeRendererPool(token);
+  }
+}
+
+async function initializeWebGPU(token) {
+  let engine = null;
+  try {
+    const { initWebGPU, WebGPUOrbRenderer } = await import("./webgpu-engine.js");
+    if (token !== rendererLifecycleToken) return;
+    engine = await initWebGPU();
+    if (token !== rendererLifecycleToken) {
+      engine?.destroy?.();
       return;
     }
+    if (!engine) {
+      reportModeStatus("webgpu / unavailable — choose WebGL");
+      return;
+    }
+    gpuEngine = engine;
+    engine.compactQuery = compactDeviceQuery;
+    engine.compactMaxDpr = 1.25;
+    // Wire the once-only loss/uncaptured-error handler BEFORE initialize: an
+    // early device loss must stop the backend cleanly instead of limping on.
+    engine.onLost = () => handleWebGPUDeviceLost();
+
+    let engineReady = false;
+    if (!engine.failed) {
+      try {
+        await engine.initialize();
+        if (token !== rendererLifecycleToken) return;
+        engineReady = !engine.failed;
+      } catch (error) {
+        if (token === rendererLifecycleToken) console.error("WebGPU initialization failed:", error);
+      }
+    }
+    if (token !== rendererLifecycleToken) return;
+
+    if (engineReady) {
+      try {
+        for (let index = 0; index < maxRendererPoolSize; index += 1) {
+          const canvas = document.createElement("canvas");
+          canvas.setAttribute("aria-hidden", "true");
+          const renderer = new WebGPUOrbRenderer(engine, canvas, orbData[index], index);
+          renderer.setQualityScale(quality.scale);
+          renderer.setFidelity(fidelityValue);
+          rendererPool.push(renderer);
+        }
+        if (engine.failed) engineReady = false;
+      } catch (error) {
+        console.error("WebGPU renderer creation failed:", error);
+        engineReady = false;
+      }
+    }
+    if (token !== rendererLifecycleToken) return;
+
+    if (engineReady && !engine.failed) {
+      activeMode = "webgpu";
+      reportModeStatus("webgpu / hero wgsl online");
+      updateLayout();
+      return;
+    }
+    reportModeStatus(engine.lost ? "webgpu / device lost — choose WebGL" : "webgpu / unavailable — choose WebGL");
+    teardownRenderers();
+  } catch (error) {
+    if (token !== rendererLifecycleToken) return;
+    console.error("WebGPU unavailable:", error);
+    teardownRenderers();
+    reportModeStatus("webgpu / unavailable — choose WebGL");
   }
-  initializeRendererPool();
 }
 
 function scheduleRendererWork(callback) {
@@ -476,16 +627,20 @@ function scheduleRendererWork(callback) {
   });
 }
 
-function initializeRendererPool(index = 0) {
+function initializeRendererPool(token, index = 0) {
+  if (token !== rendererLifecycleToken) return;
   if (index >= maxRendererPoolSize) {
     rendererBadge.textContent = rendererInitializationFailed
       ? "webgl / partial renderer"
       : "webgl / hero glsl online";
+    if (token === rendererLifecycleToken && rendererPool.length > 0) activeMode = "webgl";
+    updateRendererModeControl();
     updateLayout();
     return;
   }
 
   scheduleRendererWork(() => {
+    if (token !== rendererLifecycleToken) return;
     const canvas = document.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
     try {
@@ -496,7 +651,7 @@ function initializeRendererPool(index = 0) {
     }
     rendererBadge.textContent = `webgl / loading shader ${rendererPool.length}/${maxRendererPoolSize}`;
     updateLayout();
-    initializeRendererPool(index + 1);
+    initializeRendererPool(token, index + 1);
   });
 }
 
@@ -621,7 +776,7 @@ if (orbStage && "IntersectionObserver" in window) {
 setupRenderSettings();
 buildOrbCards();
 updateLayout();
-initializeRenderers();
+switchRendererMode(resolveDefaultRenderMode(), { persist: !hasForceWebGLOverride() });
 pauseButton.textContent = paused ? "Resume field" : "Pause field";
 
 let lastTime = 0;
@@ -641,6 +796,10 @@ function frame(now) {
 
 window.__orbDebug = () => ({
   stack: gpuEngine ? "webgpu" : "webgl",
+  mode: {
+    requested: requestedMode,
+    active: activeMode
+  },
   badge: rendererBadge.textContent,
   renderers: rendererPool.map((renderer) => ({
     seed: renderer.seed?.toFixed(3),

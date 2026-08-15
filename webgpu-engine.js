@@ -205,6 +205,7 @@ export class WebGPUEngine {
     if (this.uniformBuffer) this.uniformBuffer.destroy();
     if (this.pipeline) this.pipeline = null;
     if (this.bindGroupLayout) this.bindGroupLayout = null;
+    this.device.destroy?.();
   }
 }
 

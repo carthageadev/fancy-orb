@@ -82,6 +82,19 @@
               </select>
             </label>
 
+            <div class="render-setting" id="renderModeSetting">
+              <span>Renderer</span>
+              <button
+                type="button"
+                class="render-mode-toggle"
+                id="renderModeToggle"
+                aria-label="Switch renderer mode"
+              >
+                <span class="render-mode-current" id="renderModeValue">webgpu</span>
+                <span class="render-mode-switch" id="renderModeSwitch">switch to WebGL</span>
+              </button>
+            </div>
+
             <p class="render-settings-note" id="renderSettingsHint">
               Auto lowers resolution only after sustained low FPS.
             </p>
@@ -95,7 +108,7 @@
         </nav>
 
         <div class="topbar-actions">
-          <span class="stack-badge" id="rendererBadge">initializing renderer</span>
+          <span class="stack-badge" id="rendererBadge" aria-live="polite">initializing renderer</span>
           <a class="quiet-link" href="#shader-notes">Read the study <span aria-hidden="true">↗</span></a>
         </div>
       </header>
