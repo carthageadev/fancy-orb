@@ -422,7 +422,7 @@ function buildOrbCards() {
   rendererBadge.textContent = "initializing renderer";
 }
 
-const maxRendererPoolSize = Math.min(5, orbData.length);
+const maxRendererPoolSize = compactDeviceQuery.matches ? 3 : Math.min(5, orbData.length);
 let rendererInitializationFailed = false;
 let gpuEngine = null;
 
@@ -432,6 +432,7 @@ let gpuEngine = null;
 // actually has live renderers. `?forceWebGL` remains a session-only test
 // override and never overwrites the stored selection.
 const RENDER_MODE_STORAGE_KEY = "orb-of-fate-render-mode";
+const RENDER_MODE_EXPLICIT_KEY = "orb-of-fate-render-mode-explicit";
 let requestedMode = null;
 let activeMode = null;
 // Bumped on every switch; async init and progressive pool steps re-check it
@@ -460,8 +461,17 @@ function writeStoredRenderMode(mode) {
   if (!isRenderMode(mode)) return;
   try {
     window.localStorage.setItem(RENDER_MODE_STORAGE_KEY, mode);
+    window.localStorage.setItem(RENDER_MODE_EXPLICIT_KEY, "1");
   } catch {
     // storage unavailable — the selection still applies for this session
+  }
+}
+
+function hasExplicitStoredRenderMode() {
+  try {
+    return window.localStorage.getItem(RENDER_MODE_EXPLICIT_KEY) === "1";
+  } catch {
+    return false;
   }
 }
 
@@ -472,9 +482,12 @@ function hasForceWebGLOverride() {
 function resolveDefaultRenderMode() {
   if (hasForceWebGLOverride()) return "webgl";
   const stored = readStoredRenderMode();
-  if (isRenderMode(stored)) return stored;
-  // No stored preference: prefer WebGPU only where it exists, so browsers
-  // without WebGPU still get a working WebGL renderer on first load.
+  if (isRenderMode(stored) && (!compactDeviceQuery.matches || hasExplicitStoredRenderMode())) return stored;
+  // Compact/mobile devices start on WebGL: it is the broadly supported,
+  // lower-risk path there. The renderer toggle still allows explicit WebGPU
+  // testing on devices that expose it.
+  if (compactDeviceQuery.matches) return "webgl";
+  // No stored preference: prefer WebGPU on larger devices where it exists.
   return typeof navigator !== "undefined" && navigator.gpu ? "webgpu" : "webgl";
 }
 
@@ -658,6 +671,10 @@ function initializeRendererPool(token, index = 0) {
   });
 }
 
+function getVisibleDistance() {
+  return Math.min(2, Math.floor(Math.max(0, rendererPool.length - 1) / 2));
+}
+
 function updateMeta() {
   const data = orbData[selectedIndex];
   selectedIndexLabel.textContent = `${String(selectedIndex + 1).padStart(2, "0")} / ${String(orbData.length).padStart(2, "0")}`;
@@ -680,9 +697,10 @@ function assignVisibleRenderers() {
   renderers.fill(null);
   rendererPool.forEach((renderer) => renderer.setVisible(false));
 
+  const maxVisibleDistance = getVisibleDistance();
   const visibleIndices = cards
     .map((_, index) => index)
-    .filter((index) => Math.abs(circularDistance(index, selectedIndex, orbData.length)) <= 2)
+    .filter((index) => Math.abs(circularDistance(index, selectedIndex, orbData.length)) <= maxVisibleDistance)
     .sort((first, second) => {
       const firstDistance = Math.abs(circularDistance(first, selectedIndex, orbData.length));
       const secondDistance = Math.abs(circularDistance(second, selectedIndex, orbData.length));
@@ -702,6 +720,7 @@ function assignVisibleRenderers() {
 
 function updateLayout() {
   assignVisibleRenderers();
+  const maxVisibleDistance = getVisibleDistance();
   cards.forEach((card, index) => {
     const distance = circularDistance(index, selectedIndex, orbData.length);
     const absoluteDistance = Math.abs(distance);
@@ -710,14 +729,14 @@ function updateLayout() {
     card.style.setProperty("--orb-offset", `${offset}px`);
     card.style.setProperty("--orb-scale", `${layout.scale}`);
     card.style.setProperty("--orb-opacity", `${layout.opacity}`);
-    card.classList.toggle("is-visible", absoluteDistance <= 2);
+    card.classList.toggle("is-visible", absoluteDistance <= maxVisibleDistance);
     card.classList.toggle("is-center", absoluteDistance === 0);
     card.classList.toggle("is-near", absoluteDistance === 1);
     card.setAttribute("aria-selected", absoluteDistance === 0 ? "true" : "false");
     const renderer = renderers[index];
     if (renderer) {
       renderer.setSelected(absoluteDistance === 0);
-      renderer.setVisible(absoluteDistance <= 2);
+      renderer.setVisible(absoluteDistance <= maxVisibleDistance);
     }
   });
   updateMeta();
@@ -779,7 +798,7 @@ if (orbStage && "IntersectionObserver" in window) {
 setupRenderSettings();
 buildOrbCards();
 updateLayout();
-switchRendererMode(resolveDefaultRenderMode(), { persist: !hasForceWebGLOverride() });
+switchRendererMode(resolveDefaultRenderMode(), { persist: false });
 pauseButton.textContent = paused ? "Resume field" : "Pause field";
 
 let lastTime = 0;

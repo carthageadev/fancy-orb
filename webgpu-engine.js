@@ -276,11 +276,7 @@ export class WebGPUOrbRenderer {
     if (!this.ctx) {
       throw new Error("WebGPU canvas context unavailable.");
     }
-    this.ctx.configure({
-      device: engine.device,
-      format: engine.format,
-      alphaMode: "opaque"
-    });
+    this.configureContext();
     this.slot = index % engine.slotCount;
     this.data = data;
     this.index = index;
@@ -299,6 +295,14 @@ export class WebGPUOrbRenderer {
     this.lastWidth = 0;
     this.lastHeight = 0;
     this.bindGroup = null;
+  }
+
+  configureContext() {
+    this.ctx.configure({
+      device: this.engine.device,
+      format: this.engine.format,
+      alphaMode: "opaque"
+    });
   }
 
   setOrb(data, index) {
@@ -355,6 +359,9 @@ export class WebGPUOrbRenderer {
     this.canvas.height = height;
     this.lastWidth = width;
     this.lastHeight = height;
+    // Reconfigure after backing-size changes for mobile WebKit/Android
+    // implementations that do not refresh the swapchain automatically.
+    this.configureContext();
   }
 
   render(time) {

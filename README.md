@@ -44,9 +44,10 @@ restrained highlight.
 
 ## Compatibility
 
-WebGPU is optional. With no saved preference, the app selects WebGPU only when
-the browser exposes `navigator.gpu`; otherwise it starts WebGL 1. The renderer
-control lets you switch explicitly and persists the choice. A requested
+WebGPU is optional. With no explicit saved preference, compact/mobile devices
+start on WebGL 1 for compatibility and GPU budget; larger devices select
+WebGPU only when the browser exposes `navigator.gpu`. The renderer control
+lets you switch explicitly and persists that choice. A requested
 WebGPU mode that is unavailable, loses its device, or fails validation does
 not silently switch back: the badge reports the state and the control lets
 you choose WebGL. This keeps Chrome, Edge, Safari, Firefox, mobile, and
