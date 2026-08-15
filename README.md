@@ -41,6 +41,18 @@ refracted back wall. Its in-shader lens evaluates separate RGB offsets at
 the rim for the chromatic dispersion effect; the CSS layer only adds a
 restrained highlight.
 
+## Compatibility
+
+WebGPU is opportunistic, not required. The app uses it only when the browser
+exposes `navigator.gpu`, an adapter and device arrive within the bounded init
+window, and the WGSL pipeline validates successfully. Chrome, Edge, Safari,
+and Firefox implementations that do not meet those conditions automatically
+use the WebGL 1 renderer instead, including mobile and insecure-context cases.
+
+The same fallback also runs after a WebGPU device loss or uncaptured GPU
+validation error. No optional WebGPU features are requested, and the shader
+uses core WGSL constructs only.
+
 ## Adaptive quality
 
 `quality.js` samples per-frame time, smooths it with an EMA, and walks a

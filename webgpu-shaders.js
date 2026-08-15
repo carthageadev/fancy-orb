@@ -9,6 +9,27 @@
 //   * uniforms in one struct (layout matches UNIFORM_OFFSETS in webgpu-engine.js)
 // DUAL_LAYER is always on (this program only serves hero orbs).
 
+// Star-scale census, shared between the WGSL shader and the JS regression
+// tests. Indexed by star scale s (0 = bright/large, 1 = mid, 2 = dense dust).
+// These exact values are the GLSL reference from high-quality-shaders.js:
+//   sharp  = (s == 0 ? 260.0 : (s == 1 ? 700.0 : 1600.0))
+//   bright = (s == 0 ? 1.7   : (s == 1 ? 0.9   : 0.5))
+export const STAR_SHARP_BY_SCALE = [260.0, 700.0, 1600.0];
+export const STAR_BRIGHT_BY_SCALE = [1.7, 0.9, 0.5];
+
+function wgslFloat(value) {
+  const text = String(Number(value));
+  return text.includes(".") || text.includes("e") || text.includes("E") ? text : `${text}.0`;
+}
+
+// Build the WGSL select() chain that mirrors the GLSL ternary above. WGSL's
+// select(falseValue, trueValue, condition): the outer select picks s == 0,
+// the inner one s == 1, exactly like the nested ternary (s == 2 falls out).
+export function wgslSelectByScale(values) {
+  const [v0, v1, v2] = values;
+  return `select(select(${wgslFloat(v2)}, ${wgslFloat(v1)}, s == 1u), ${wgslFloat(v0)}, s == 0u)`;
+}
+
 export const HERO_WGSL = `
 struct VSOut {
   @builtin(position) pos: vec4f,
@@ -172,7 +193,7 @@ fn starfield(n: vec3f, t: f32) -> vec4f {
     // and brightness follows size — a real magnitude distribution
     let hz = h1(hx * 53.0 + hy * 71.0 + cell.x);
     let sizeJit = 0.35 + 1.8 * hz * hz; // few big, many small
-    let sharp = select(1600.0, select(700.0, 260.0, s == 0u), s == 1u) / sizeJit * resFac;
+    let sharp = ${wgslSelectByScale(STAR_SHARP_BY_SCALE)} / sizeJit * resFac;
     let star = exp(-d * d * sharp) * keep * tw;
     // near-white stars with the faintest temperature variation, like the sky
     let tintSel = select(
@@ -181,7 +202,7 @@ fn starfield(n: vec3f, t: f32) -> vec4f {
       hx < 0.33
     );
     let tint = mix(vec3f(1.0), tintSel, 0.6);
-    let bright = select(0.5, select(0.9, 1.7, s == 0u), s == 1u) * (0.55 + 0.7 * sizeJit);
+    let bright = ${wgslSelectByScale(STAR_BRIGHT_BY_SCALE)} * (0.55 + 0.7 * sizeJit);
     // small orbs: keep the bright/mid stars (just faded), but drop most of the dense faint dust (s==2)
     // and the grain — those are what read as granular noise at list sizes.
     let starFade = mix(select(0.45, 0.14, s == 2u), 1.0, detail);

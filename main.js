@@ -404,12 +404,17 @@ function buildOrbCards() {
 const maxRendererPoolSize = Math.min(5, orbData.length);
 let rendererInitializationFailed = false;
 let gpuEngine = null;
+let fallbackInProgress = false;
 
 function fallbackToWebGL(reason) {
+  if (fallbackInProgress) return; // device loss + uncaptured error must fall back once
+  fallbackInProgress = true;
   console.warn("Switching to WebGL render path:", reason);
+  const failedEngine = gpuEngine;
   rendererPool.forEach((renderer) => renderer.destroy?.());
   rendererPool.length = 0;
   gpuEngine = null;
+  failedEngine?.destroy?.();
   needsRender = true;
   initializeRendererPool();
 }
@@ -419,25 +424,43 @@ async function initializeRenderers() {
   const { initWebGPU, WebGPUOrbRenderer } = await import("./webgpu-engine.js");
   if (!forceWebGL) {
     gpuEngine = await initWebGPU();
-    if (gpuEngine) {
-      gpuEngine.compactQuery = compactDeviceQuery;
-      gpuEngine.compactMaxDpr = 1.25;
+    const engine = gpuEngine;
+    if (engine) {
+      engine.compactQuery = compactDeviceQuery;
+      engine.compactMaxDpr = 1.25;
+      // Wire the once-only loss/uncaptured-error fallback BEFORE init: an early
+      // device loss must fall back to WebGL instead of half-initializing.
+      engine.onLost = () => fallbackToWebGL("device lost");
+      let engineReady = false;
       try {
-        await gpuEngine.initialize();
-        for (let index = 0; index < maxRendererPoolSize; index += 1) {
-          const canvas = document.createElement("canvas");
-          canvas.setAttribute("aria-hidden", "true");
-          rendererPool.push(new WebGPUOrbRenderer(gpuEngine, canvas, orbData[index], index));
+        if (!engine.failed) {
+          await engine.initialize();
+          engineReady = !engine.failed;
         }
-        gpuEngine.onLost = () => fallbackToWebGL("device lost");
+      } catch (error) {
+        console.error("WebGPU initialization failed; falling back to WebGL.", error);
+      }
+      if (engineReady) {
+        try {
+          for (let index = 0; index < maxRendererPoolSize; index += 1) {
+            const canvas = document.createElement("canvas");
+            canvas.setAttribute("aria-hidden", "true");
+            rendererPool.push(new WebGPUOrbRenderer(engine, canvas, orbData[index], index));
+          }
+        } catch (error) {
+          console.error("WebGPU renderer creation failed; falling back to WebGL.", error);
+          engineReady = false;
+        }
+      }
+      if (engineReady) {
         rendererBadge.textContent = "webgpu / hero wgsl online";
         updateLayout();
         return;
-      } catch (error) {
-        console.error("WebGPU initialization failed; falling back to WebGL.", error);
-        gpuEngine.destroy?.();
-        gpuEngine = null;
       }
+      // No-op if the device died during init and onLost already dispatched
+      // the fallback; otherwise cleans up partial renderers and starts WebGL.
+      fallbackToWebGL(engine.failed ? "device lost during initialization" : "initialization failed");
+      return;
     }
   }
   initializeRendererPool();

@@ -82,12 +82,25 @@ export class WebGPUEngine {
     this.renderPasses = 0; // frames * passes, for the debug badge / smoke tests
     this.frameSubmissions = 0; // actual queue submissions (batched: 1/frame)
     this.onLost = null; // set by the app: called once when the device dies
+    this.destroyed = false;
 
-    device.lost.then((info) => {
+    // Once-only loss/uncaptured-error callback, so device.lost and
+    // uncapturederror can't double-fire the fallback.
+    const handleLoss = (reason) => {
+      if (this.lost || this.destroyed) return;
+      this.lost = true;
       this.failed = true;
-      console.warn("WebGPU device lost:", info.message);
-      this.onLost?.(info);
-    });
+      const message = reason?.message || String(reason);
+      console.warn("WebGPU device lost:", message);
+      this.onLost?.(reason);
+    };
+    this.lost = false;
+    device.lost.then(handleLoss, () => handleLoss("device.lost rejected"));
+    if (typeof device.addEventListener === "function") {
+      device.addEventListener("uncapturederror", (event) => {
+        handleLoss(event?.error ?? event);
+      });
+    }
 
     this.uniformData = new Float32Array(8 * (UNIFORM_SLOT_ALIGN / 4)); // 8 slots max
     this.uniformBuffer = device.createBuffer({
@@ -131,14 +144,31 @@ export class WebGPUEngine {
       }]
     });
 
-    this.pipeline = this.device.createRenderPipeline({
-      layout: this.device.createPipelineLayout({
-        bindGroupLayouts: [this.bindGroupLayout]
-      }),
-      vertex: { module: shaderModule, entryPoint: "vs_main" },
-      fragment: { module: shaderModule, entryPoint: "fs_main", targets: [{ format: this.format }] },
-      primitive: { topology: "triangle-list" }
-    });
+    // Pipeline creation is validated asynchronously on some implementations
+    // (Chrome reports validation errors via error scopes, not sync throws).
+    // Where error scopes are supported, capture validation failures so a bad
+    // pipeline falls back to WebGL instead of limping along. The existing
+    // shader compilation-info check above is preserved.
+    const hasErrorScopes = typeof this.device.pushErrorScope === "function"
+      && typeof this.device.popErrorScope === "function";
+    if (hasErrorScopes) this.device.pushErrorScope("validation");
+    try {
+      this.pipeline = this.device.createRenderPipeline({
+        layout: this.device.createPipelineLayout({
+          bindGroupLayouts: [this.bindGroupLayout]
+        }),
+        vertex: { module: shaderModule, entryPoint: "vs_main" },
+        fragment: { module: shaderModule, entryPoint: "fs_main", targets: [{ format: this.format }] },
+        primitive: { topology: "triangle-list" }
+      });
+    } finally {
+      if (hasErrorScopes) {
+        const scopeError = await this.device.popErrorScope();
+        if (scopeError) {
+          throw new Error(`WebGPU pipeline validation failed: ${scopeError.message}`);
+        }
+      }
+    }
 
     this.slotCount = Math.floor(this.uniformData.length / (UNIFORM_SLOT_ALIGN / 4));
   }
@@ -168,6 +198,8 @@ export class WebGPUEngine {
   }
 
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.failed = true;
     this.frameEncoder = null;
     if (this.uniformBuffer) this.uniformBuffer.destroy();
@@ -176,23 +208,46 @@ export class WebGPUEngine {
   }
 }
 
+// Bounded settle: resolves with the promise's value, or null after `ms` if it
+// never settles. Some browsers wedge or never answer requestAdapter() on
+// unsupported/headless setups, and a hang here would leave the page stuck
+// instead of falling back to WebGL. Pure helper — no browser globals.
+export function withTimeout(promise, ms) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve(null);
+    }, ms);
+    promise.then(
+      (value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(null);
+      }
+    );
+  });
+}
+
 export async function initWebGPU() {
   if (!navigator.gpu) return null;
-  let adapter;
   try {
-    adapter = await navigator.gpu.requestAdapter();
+    const adapter = await withTimeout(navigator.gpu.requestAdapter(), 5000);
+    if (!adapter) return null;
+    const device = await withTimeout(adapter.requestDevice(), 5000);
+    if (!device) return null;
+    return new WebGPUEngine(device, navigator.gpu.getPreferredCanvasFormat());
   } catch {
     return null;
   }
-  if (!adapter) return null;
-  let device;
-  try {
-    device = await adapter.requestDevice();
-  } catch {
-    return null;
-  }
-  if (!device) return null;
-  return new WebGPUEngine(device, navigator.gpu.getPreferredCanvasFormat());
 }
 
 export class WebGPUOrbRenderer {
@@ -344,6 +399,9 @@ export class WebGPUOrbRenderer {
     } catch {
       // context may already be gone after device loss
     }
+    // Drop the canvas from the DOM so a device-loss WebGL rebuild is visible
+    // instead of lingering under a dead WebGPU canvas.
+    this.canvas.remove?.();
     this.visible = false;
   }
 }
