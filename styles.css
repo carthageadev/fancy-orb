@@ -600,8 +600,7 @@ a {
 }
 
 .orb-card.is-center .orb-label {
-  color: #f2f0ec;
-  font-weight: 600;
+  display: none;
 }
 
 .carousel-arrow {
