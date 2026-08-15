@@ -1,5 +1,6 @@
 import { highQualityFragmentShader, highQualityVertexShader } from "./high-quality-shaders.js";
 import { buildOrbSpec, specFromSeed, getSeedOffset, setSeedOffset } from "./orb-spec.js";
+import { QualityManager, FIDELITY_MODES } from "./quality.js";
 
 // The active renderer pass is imported from high-quality-shaders.js above.
 const orbData = [
@@ -42,18 +43,10 @@ const fidelitySetting = document.querySelector("#fidelitySetting");
 
 let selectedIndex = 0;
 let paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-let seedOffset = 0;
 const compactDeviceQuery = window.matchMedia("(max-width: 640px), (pointer: coarse)");
-const qualityLevels = [0.58, 0.72, 0.86, 1];
-let qualityLevelIndex = qualityLevels.length - 1;
-let adaptiveQualityEnabled = true;
 let fidelityValue = 1;
 let needsRender = true;
 let stageInView = true;
-let performanceSampleStart = 0;
-let performanceSampleFrames = 0;
-let lowFpsWindows = 0;
-let highFpsWindows = 0;
 
 function syncViewportMetrics() {
   const viewportHeight = Math.max(1, Math.round(window.visualViewport?.height || window.innerHeight));
@@ -167,7 +160,7 @@ class OrbRenderer {
     this.lastHeight = 0;
     this.visible = true;
     this.contextLost = false;
-    this.qualityScale = qualityLevels[qualityLevelIndex];
+    this.qualityScale = quality.scale;
     this.fidelity = fidelityValue;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
@@ -309,21 +302,13 @@ const renderers = orbData.map(() => null);
 const rendererPool = [];
 const cards = [];
 
-function setQualityLevel(nextIndex) {
-  const nextLevel = Math.max(0, Math.min(qualityLevels.length - 1, nextIndex));
-  if (nextLevel === qualityLevelIndex) return;
-  qualityLevelIndex = nextLevel;
-  const scale = qualityLevels[qualityLevelIndex];
-  rendererPool.forEach((renderer) => renderer.setQualityScale(scale));
-  needsRender = true;
-}
-
-const resolutionModes = {
-  low: 0,
-  balanced: 1,
-  high: 2,
-  full: 3
-};
+const quality = new QualityManager({
+  compact: compactDeviceQuery.matches,
+  onLevelChange: (scale) => {
+    rendererPool.forEach((renderer) => renderer.setQualityScale(scale));
+    needsRender = true;
+  }
+});
 
 const fidelityModes = {
   lite: 0.58,
@@ -332,13 +317,7 @@ const fidelityModes = {
 };
 
 function applyResolutionMode(mode) {
-  adaptiveQualityEnabled = mode === "auto";
-  if (adaptiveQualityEnabled) {
-    setQualityLevel(qualityLevels.length - 1);
-  } else {
-    setQualityLevel(resolutionModes[mode] ?? resolutionModes.balanced);
-  }
-  resetPerformanceSample();
+  quality.setMode(mode);
   needsRender = true;
 }
 
@@ -377,45 +356,9 @@ function setupRenderSettings() {
   });
 }
 
-function resetPerformanceSample() {
-  performanceSampleStart = 0;
-  performanceSampleFrames = 0;
-  lowFpsWindows = 0;
-  highFpsWindows = 0;
-}
-
-function updateAdaptiveQuality(now, didRender) {
-  if (!adaptiveQualityEnabled || !didRender || paused || document.hidden || !stageInView) return;
-  if (!performanceSampleStart) performanceSampleStart = now;
-  performanceSampleFrames += 1;
-
-  const elapsed = now - performanceSampleStart;
-  if (elapsed < 1600) return;
-
-  const fps = performanceSampleFrames * 1000 / elapsed;
-  performanceSampleStart = now;
-  performanceSampleFrames = 0;
-
-  if (fps < 30) {
-    lowFpsWindows += 1;
-    highFpsWindows = 0;
-    if (lowFpsWindows >= 2) {
-      setQualityLevel(qualityLevelIndex - 1);
-      lowFpsWindows = 0;
-    }
-    return;
-  }
-
-  lowFpsWindows = 0;
-  if (fps > 52) {
-    highFpsWindows += 1;
-    if (highFpsWindows >= 3) {
-      setQualityLevel(qualityLevelIndex + 1);
-      highFpsWindows = 0;
-    }
-  } else {
-    highFpsWindows = 0;
-  }
+function updateAdaptiveQuality(frameMs, didRender) {
+  if (!didRender || paused || document.hidden || !stageInView) return;
+  quality.sample(frameMs);
 }
 
 function renderVisibleOrbs(time) {
@@ -612,7 +555,7 @@ pauseButton.addEventListener("click", () => {
   paused = !paused;
   pauseButton.textContent = paused ? "Resume field" : "Pause field";
   needsRender = true;
-  resetPerformanceSample();
+  quality.reset();
 });
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") setRenderSettingsOpen(false);
@@ -623,12 +566,12 @@ window.addEventListener("resize", () => {
   syncViewportMetrics();
   rendererPool.forEach((renderer) => renderer.resize());
   needsRender = true;
-  resetPerformanceSample();
+  quality.reset();
 });
 
 document.addEventListener("visibilitychange", () => {
   needsRender = true;
-  resetPerformanceSample();
+  quality.reset();
 });
 
 if (orbStage && "IntersectionObserver" in window) {
@@ -636,7 +579,7 @@ if (orbStage && "IntersectionObserver" in window) {
     stageInView = entries.some((entry) => entry.isIntersecting);
     if (stageInView) {
       needsRender = true;
-      resetPerformanceSample();
+      quality.reset();
     }
   }, { threshold: 0.01 });
   stageObserver.observe(orbStage);
@@ -649,13 +592,17 @@ initializeRenderers();
 pauseButton.textContent = paused ? "Resume field" : "Pause field";
 
 let lastTime = 0;
+let lastFrameNow = 0;
 function frame(now) {
   if (!paused) lastTime = now * 0.001;
+  const frameMs = lastFrameNow ? now - lastFrameNow : 16.7;
+  lastFrameNow = now;
   const shouldRender = stageInView && !document.hidden && (!paused || needsRender);
   const didRender = shouldRender ? renderVisibleOrbs(lastTime) : false;
   if (didRender) gpuEngine?.endFrame();
-  updateAdaptiveQuality(now, didRender && !paused);
-window.requestAnimationFrame(frame);
+  updateAdaptiveQuality(frameMs, didRender && !paused);
+  window.requestAnimationFrame(frame);
+}
 
 window.__orbDebug = () => ({
   stack: gpuEngine ? "webgpu" : "webgl",
@@ -671,9 +618,14 @@ window.__orbDebug = () => ({
   gpu: gpuEngine
     ? { format: gpuEngine.format, renderPasses: gpuEngine.renderPasses, failed: gpuEngine.failed }
     : null,
-  qualityLevel: qualityLevels[qualityLevelIndex],
+  quality: {
+    enabled: quality.enabled,
+    scale: quality.scale,
+    label: quality.label,
+    emaMs: +quality.emaMs.toFixed(2),
+    index: quality.index
+  },
   fidelity: fidelityValue
 });
-}
 
 window.requestAnimationFrame(frame);
