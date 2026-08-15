@@ -123,36 +123,82 @@ async function main() {
   }
 
   const client = await connect(page.webSocketDebuggerUrl);
-  const deadline = Date.now() + 45000;
-  let badge = null;
-  while (Date.now() < deadline) {
-    await sleep(500);
-    try {
-      const result = await client.send("Runtime.evaluate", {
-        expression: `(() => {
-          const debug = window.__orbDebug ? window.__orbDebug() : null;
-          if (debug?.badge?.includes("unavailable") && debug.mode?.requested === "webgpu") {
-            document.querySelector("#renderModeToggle")?.click();
-          }
-          return debug?.badge ?? null;
-        })()`,
-        returnByValue: true
-      });
-      badge = result.result.value;
-      if (badge && badge.endsWith("online")) break;
-    } catch {
-      // page still navigating or frame not ready
-    }
+  async function readDebug() {
+    const result = await client.send("Runtime.evaluate", {
+      expression: `(() => {
+        const debug = window.__orbDebug ? window.__orbDebug() : null;
+        if (debug?.badge?.includes("unavailable") && debug.mode?.requested === "webgpu") {
+          document.querySelector("#renderModeToggle")?.click();
+        }
+        return debug ? {
+          badge: debug.badge,
+          requested: debug.mode?.requested,
+          active: debug.mode?.active,
+          canvasCount: document.querySelectorAll("canvas").length,
+          storage: localStorage.getItem("orb-of-fate-render-mode")
+        } : null;
+      })()`,
+      returnByValue: true
+    });
+    return result.result.value;
   }
+
+  async function waitForOnline() {
+    const deadline = Date.now() + 45000;
+    let state = null;
+    while (Date.now() < deadline) {
+      await sleep(500);
+      try {
+        state = await readDebug();
+        if (state?.badge?.endsWith("online")) return state;
+      } catch {
+        // page still navigating or frame not ready
+      }
+    }
+    return state;
+  }
+
+  async function clickRendererToggle() {
+    await client.send("Runtime.evaluate", {
+      expression: "document.querySelector('#renderModeToggle')?.click()",
+      returnByValue: true
+    });
+  }
+
+  const initial = await waitForOnline();
+  if (!initial?.badge?.endsWith("online") || initial.canvasCount !== 5) {
+    throw new Error(`initial renderer did not come online cleanly: ${JSON.stringify(initial)}`);
+  }
+
+  let expectedMode = initial.active;
+  if (initial.active === "webgpu") {
+    await clickRendererToggle();
+    const webgl = await waitForOnline();
+    if (webgl?.active !== "webgl" || webgl.canvasCount !== 5) {
+      throw new Error(`WebGPU -> WebGL switch failed: ${JSON.stringify(webgl)}`);
+    }
+    await clickRendererToggle();
+    const webgpu = await waitForOnline();
+    if (webgpu?.active !== "webgpu" || webgpu.canvasCount !== 5) {
+      throw new Error(`WebGL -> WebGPU switch failed: ${JSON.stringify(webgpu)}`);
+    }
+    expectedMode = "webgpu";
+  }
+
+  await client.send("Runtime.evaluate", {
+    expression: "location.reload()",
+    returnByValue: true
+  });
+  const reloaded = await waitForOnline();
+  if (reloaded?.active !== expectedMode || reloaded.canvasCount !== 5) {
+    throw new Error(`persisted renderer mode failed after reload: ${JSON.stringify(reloaded)}`);
+  }
+
   client.close();
   child.kill();
 
-  if (badge && badge.endsWith("online")) {
-    console.log(`PASS: renderer online — "${badge}"`);
-    process.exit(0);
-  }
-  console.error(`FAIL: renderer badge not online (got "${badge ?? "none"}")`);
-  process.exit(1);
+  console.log(`PASS: renderer mode smoke — ${expectedMode}, persisted, five canvases`);
+  process.exit(0);
 }
 
 main().catch((error) => {

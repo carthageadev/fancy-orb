@@ -96,8 +96,18 @@ test("auto mode returns to the top rung and re-enables", () => {
   assert.equal(manager.enabled, true);
 });
 
-test("the ladder never leaves its bounds", () => {
+test("compact Auto mode returns to the 70% baseline", () => {
   const manager = makeManager({ compact: true });
+  manager.setMode("full");
+  manager.setMode("auto");
+  assert.equal(manager.scale, COMPACT_SCALE);
+  assert.equal(manager.enabled, true);
+  for (let index = 0; index < 600; index += 1) manager.sample(6);
+  assert.equal(manager.scale, COMPACT_SCALE, "compact Auto must stay capped at 70%");
+});
+
+test("the ladder never leaves its bounds", () => {
+  const manager = makeManager();
   for (let index = 0; index < 200; index += 1) manager.sample(60);
   assert.equal(manager.scale, 0.5, "must bottom out at the lowest rung");
   for (let index = 0; index < 600; index += 1) manager.sample(6);

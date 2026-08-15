@@ -410,7 +410,6 @@ export class WebGPUOrbRenderer {
   }
 
   destroy() {
-    this.engine.failed = true;
     this.bindGroup = null;
     try {
       this.ctx.unconfigure();

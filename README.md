@@ -21,10 +21,11 @@ Opening `index.html` directly may work in some browsers, but a local server is t
 
 ## Render stacks
 
-The app tries **WebGPU first** (single device, one shared pipeline, one
-batched submission per frame) and falls back to **WebGL 1** if WebGPU is
-unavailable — on unsupported browsers, low-end devices, or after a device
-loss mid-session. The badge under the stage shows which stack is live.
+The app can run either **WebGPU** (single device, one shared pipeline, one
+batched submission per frame) or **WebGL 1**. The Renderer control switches
+between them and persists the choice; the badge under the stage shows which
+stack is live. A WebGPU failure is reported instead of silently changing the
+backend.
 
 - `webgpu-engine.js` — batched WebGPU renderer: one dynamic-offset uniform
   buffer shared by every orb, all passes recorded in a single command
@@ -59,8 +60,9 @@ constructs only.
 `quality.js` samples per-frame time, smooths it with an EMA, and walks a
 resolution ladder: sustained lag drops a rung (down to 50% on weak devices),
 sustained headroom climbs back to 100%. Manual modes pin a fixed rung;
-compact/coarse-pointer devices start at the 70% rung, and auto mode adapts
-from there after the warmup window. Both renderers expose
+compact/coarse-pointer devices start at the 70% rung; compact Auto stays
+capped there and can lower only after sustained lag, while desktop Auto adapts
+from 100% after the warmup window. Both renderers expose
 `setQualityScale()` and `setFidelity()`, so the manager drives either stack
 identically.
 
@@ -68,7 +70,7 @@ identically.
 
 ```powershell
 node --test "test/*.test.js"   # unit: spec parity, uniform layout, ladder, WGSL sanity
-node test/smoke.mjs            # end-to-end: real headless Chrome, badge online
+node test/smoke.mjs            # end-to-end: explicit mode + persistence smoke
 ```
 
 The smoke test spawns its own throwaway headless Chrome (temp profile, never

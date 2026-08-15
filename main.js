@@ -47,6 +47,9 @@ const compactDeviceQuery = window.matchMedia("(max-width: 640px), (pointer: coar
 let fidelityValue = 1;
 let needsRender = true;
 let stageInView = true;
+const startupStartedAt = performance.now();
+let rendererReadyAt = null;
+let firstRenderAt = null;
 
 function syncViewportMetrics() {
   const viewportHeight = Math.max(1, Math.round(window.visualViewport?.height || window.innerHeight));
@@ -331,19 +334,13 @@ const quality = new QualityManager({
   }
 });
 
-const fidelityModes = {
-  lite: 0.58,
-  balanced: 0.8,
-  full: 1
-};
-
 function applyResolutionMode(mode) {
   quality.setMode(mode);
   needsRender = true;
 }
 
 function applyFidelityMode(mode) {
-  fidelityValue = fidelityModes[mode] ?? fidelityModes.full;
+  fidelityValue = FIDELITY_MODES[mode] ?? FIDELITY_MODES.full;
   rendererPool.forEach((renderer) => renderer.setFidelity(fidelityValue));
   needsRender = true;
 }
@@ -520,6 +517,9 @@ function teardownRenderers() {
 
 function reportModeStatus(badgeText) {
   rendererBadge.textContent = badgeText;
+  if (badgeText.endsWith("online") && rendererReadyAt === null) {
+    rendererReadyAt = performance.now();
+  }
   updateRendererModeControl();
 }
 
@@ -633,9 +633,9 @@ function scheduleRendererWork(callback) {
 function initializeRendererPool(token, index = 0) {
   if (token !== rendererLifecycleToken) return;
   if (index >= maxRendererPoolSize) {
-    rendererBadge.textContent = rendererInitializationFailed
+    reportModeStatus(rendererInitializationFailed
       ? "webgl / partial renderer"
-      : "webgl / hero glsl online";
+      : "webgl / hero glsl online");
     if (token === rendererLifecycleToken && rendererPool.length > 0) activeMode = "webgl";
     updateRendererModeControl();
     updateLayout();
@@ -791,7 +791,14 @@ function frame(now) {
   const frameMs = lastFrameNow ? now - lastFrameNow : 16.7;
   lastFrameNow = now;
   const shouldRender = stageInView && !document.hidden && (!paused || needsRender);
-  const didRender = shouldRender ? renderVisibleOrbs(lastTime) : false;
+  let didRender = false;
+  try {
+    didRender = shouldRender ? renderVisibleOrbs(lastTime) : false;
+  } catch (error) {
+    console.error("Renderer frame failed:", error);
+    if (activeMode === "webgpu") handleWebGPUDeviceLost();
+  }
+  if (didRender && firstRenderAt === null) firstRenderAt = performance.now();
   if (didRender) gpuEngine?.endFrame();
   updateAdaptiveQuality(frameMs, didRender && !paused);
   window.requestAnimationFrame(frame);
@@ -827,6 +834,10 @@ window.__orbDebug = () => ({
     label: quality.label,
     emaMs: +quality.emaMs.toFixed(2),
     index: quality.index
+  },
+  startup: {
+    rendererReadyMs: rendererReadyAt === null ? null : +(rendererReadyAt - startupStartedAt).toFixed(1),
+    firstRenderMs: firstRenderAt === null ? null : +(firstRenderAt - startupStartedAt).toFixed(1)
   },
   fidelity: fidelityValue
 });

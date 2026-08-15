@@ -3,12 +3,13 @@
 // Samples per-frame time (rAF deltas), smooths with an EMA, and walks a
 // resolution scale ladder: sustained lag drops a rung (down to 0.5 on very
 // weak devices), sustained headroom climbs back up. Manual modes pin a fixed
-// rung; auto mode (default) walks freely.
+// rung; auto mode (default) walks within the device-class budget.
 //
 // Compact/coarse-pointer devices begin at exactly 70% backing resolution —
 // the 0.7 rung, two below the desktop start — so weak mobile GPUs pay for
-// fewer pixels up front. Auto mode still adapts from there after the warmup
-// window.
+// fewer pixels up front. Auto mode still adapts down after the warmup window,
+// but compact Auto is capped at 70% so a fast-looking mobile device does not
+// immediately climb back into an expensive full-resolution path.
 //
 // Both renderers (WebGL and WebGPU) implement setQualityScale(scale) and
 // setFidelity(value), so the manager drives both stacks identically.
@@ -16,7 +17,7 @@
 export const QUALITY_LEVELS = [0.5, 0.58, 0.7, 0.84, 1];
 
 // Compact/coarse-pointer devices start on exactly this rung (70%). It is a
-// real ladder rung, so auto mode can walk either direction from it.
+// real ladder rung, so compact Auto can walk down from it when needed.
 export const COMPACT_SCALE = 0.7;
 
 // Manual-mode rungs (labels preserved from the original settings UI).
@@ -42,6 +43,7 @@ const EMA_ALPHA = 0.1;      // frame-time smoothing
 export class QualityManager {
   constructor({ onLevelChange, compact = false, warmupMs = 1500 } = {}) {
     this.levels = QUALITY_LEVELS;
+    this.autoMaxIndex = compact ? this.levels.indexOf(COMPACT_SCALE) : this.levels.length - 1;
     // compact/coarse-pointer devices begin at the exact 70% rung (two below
     // the desktop start); full-size devices begin at the top rung.
     this.index = compact ? this.levels.indexOf(COMPACT_SCALE) : this.levels.length - 1;
@@ -63,7 +65,8 @@ export class QualityManager {
   }
 
   setLevel(nextIndex) {
-    const clamped = Math.max(0, Math.min(this.levels.length - 1, nextIndex));
+    const maxIndex = this.enabled ? this.autoMaxIndex : this.levels.length - 1;
+    const clamped = Math.max(0, Math.min(maxIndex, nextIndex));
     if (clamped === this.index) return;
     this.index = clamped;
     this.onLevelChange(this.scale);
@@ -72,7 +75,7 @@ export class QualityManager {
   setMode(mode) {
     if (mode === "auto") {
       this.enabled = true;
-      this.setLevel(this.levels.length - 1);
+      this.setLevel(this.autoMaxIndex);
     } else {
       this.enabled = false;
       this.setLevel(RESOLUTION_MODES[mode] ?? RESOLUTION_MODES.balanced);
