@@ -14,6 +14,6 @@
   </defs>
   <title id="title" />
   <desc id="desc" />
-  <circle id="orb-body" cx="31.3" cy="31.7" r="23" fill="#1a1a1a" stroke="#111827" stroke-width="0" />
+  <circle id="orb-body" cx="32" cy="32" r="23" fill="#1a1a1a" stroke="#111827" stroke-width="2" />
   <circle id="spectral-rim" cx="32" cy="32" r="22.2" fill="none" stroke="url(#rim)" stroke-width="2.8" />
 </svg>
