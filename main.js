@@ -616,7 +616,12 @@ window.__orbDebug = () => ({
     canvas: [renderer.canvas?.width, renderer.canvas?.height]
   })),
   gpu: gpuEngine
-    ? { format: gpuEngine.format, renderPasses: gpuEngine.renderPasses, failed: gpuEngine.failed }
+    ? {
+        format: gpuEngine.format,
+        renderPasses: gpuEngine.renderPasses,
+        submissions: gpuEngine.frameSubmissions,
+        failed: gpuEngine.failed
+      }
     : null,
   quality: {
     enabled: quality.enabled,

@@ -80,6 +80,7 @@ export class WebGPUEngine {
     this.frameEncoder = null;
     this.failed = false;
     this.renderPasses = 0; // frames * passes, for the debug badge / smoke tests
+    this.frameSubmissions = 0; // actual queue submissions (batched: 1/frame)
 
     device.lost.then((info) => {
       this.failed = true;
@@ -155,6 +156,7 @@ export class WebGPUEngine {
   endFrame() {
     if (!this.frameEncoder) return;
     this.device.queue.submit([this.frameEncoder.finish()]);
+    this.frameSubmissions += 1;
     this.frameEncoder = null;
   }
 
