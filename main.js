@@ -1,4 +1,5 @@
 import { highQualityFragmentShader, highQualityVertexShader } from "./high-quality-shaders.js";
+import { buildOrbSpec, specFromSeed, getSeedOffset, setSeedOffset } from "./orb-spec.js";
 
 // The active renderer pass is imported from high-quality-shaders.js above.
 const orbData = [
@@ -73,13 +74,13 @@ function syncViewportMetrics() {
 syncViewportMetrics();
 window.visualViewport?.addEventListener("resize", syncViewportMetrics, { passive: true });
 
-function hexToRgb(hex) {
+function hexToRgb(hex) { // legacy: superseded by orb-spec.js
   const normalized = hex.replace("#", "");
   const value = Number.parseInt(normalized, 16);
   return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
 }
 
-function mixRgb(first, second, amount) {
+function mixRgb(first, second, amount) { // legacy: superseded by orb-spec.js
   return first.map((channel, index) => channel + (second[index] - channel) * amount);
 }
 
@@ -238,23 +239,25 @@ class OrbRenderer {
   setOrb(data, index) {
     this.data = data;
     this.index = index;
-    this.seed = seedOffset + index * 17.13 + 4.7;
+    const spec = buildOrbSpec(data, index);
+    this.seed = spec.seed;
+    this.phase = spec.phase;
+    this.spin = spec.spin;
+    this.starDensity = spec.starDensity;
+    this.accentA = spec.accentA;
+    this.accentB = spec.accentB;
+    this.accentC = spec.accentC;
+    this.anchor = spec.anchor;
     this.audio = 0;
-    this.phase = this.seed * 0.73 + data.name.length * 0.13;
-    this.spin = this.seed * 0.19;
-    this.starDensity = data.starDensity ?? 1;
-    this.accentA = hexToRgb(data.a);
-    this.accentB = hexToRgb(data.b);
-    this.accentC = hexToRgb(data.c || data.b);
-    this.anchor = mixRgb(this.accentA, this.accentB, 0.28);
     this.lastWidth = 0;
     this.lastHeight = 0;
   }
 
   setSeed(seed) {
     this.seed = seed;
-    this.phase = seed * 0.73 + this.data.name.length * 0.13;
-    this.spin = seed * 0.19;
+    const motion = specFromSeed(this.data, seed);
+    this.phase = motion.phase;
+    this.spin = motion.spin;
   }
 
   resize() {
@@ -457,6 +460,32 @@ function buildOrbCards() {
 
 const maxRendererPoolSize = Math.min(5, orbData.length);
 let rendererInitializationFailed = false;
+let gpuEngine = null;
+
+async function initializeRenderers() {
+  const { initWebGPU, WebGPUOrbRenderer } = await import("./webgpu-engine.js");
+  gpuEngine = await initWebGPU();
+  if (gpuEngine) {
+    gpuEngine.compactQuery = compactDeviceQuery;
+    gpuEngine.compactMaxDpr = 1.25;
+    try {
+      await gpuEngine.initialize();
+      for (let index = 0; index < maxRendererPoolSize; index += 1) {
+        const canvas = document.createElement("canvas");
+        canvas.setAttribute("aria-hidden", "true");
+        rendererPool.push(new WebGPUOrbRenderer(gpuEngine, canvas, orbData[index], index));
+      }
+      rendererBadge.textContent = "webgpu / hero wgsl online";
+      updateLayout();
+      return;
+    } catch (error) {
+      console.error("WebGPU initialization failed; falling back to WebGL.", error);
+      gpuEngine.destroy?.();
+      gpuEngine = null;
+    }
+  }
+  initializeRendererPool();
+}
 
 function scheduleRendererWork(callback) {
   window.requestAnimationFrame(() => {
@@ -568,8 +597,8 @@ function shiftOrb(amount) {
 }
 
 function randomizeSeeds() {
-  seedOffset = Math.random() * 1000;
-  rendererPool.forEach((renderer) => renderer.setSeed(seedOffset + renderer.index * 17.13 + 4.7));
+  setSeedOffset(Math.random() * 1000);
+  rendererPool.forEach((renderer) => renderer.setSeed(getSeedOffset() + renderer.index * 17.13 + 4.7));
   needsRender = true;
 }
 
@@ -613,7 +642,7 @@ if (orbStage && "IntersectionObserver" in window) {
 setupRenderSettings();
 buildOrbCards();
 updateLayout();
-initializeRendererPool();
+initializeRenderers();
 pauseButton.textContent = paused ? "Resume field" : "Pause field";
 
 let lastTime = 0;
@@ -621,6 +650,7 @@ function frame(now) {
   if (!paused) lastTime = now * 0.001;
   const shouldRender = stageInView && !document.hidden && (!paused || needsRender);
   const didRender = shouldRender ? renderVisibleOrbs(lastTime) : false;
+  if (didRender) gpuEngine?.endFrame();
   updateAdaptiveQuality(now, didRender && !paused);
   window.requestAnimationFrame(frame);
 }
