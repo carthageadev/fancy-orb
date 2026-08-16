@@ -7,9 +7,10 @@
 //   * uniforms live in one big dynamic-offset buffer: switching orbs is just
 //     a dynamic offset change, no pipeline/bind-group churn
 //   * WebGPUOrbRenderer mirrors the WebGL OrbRenderer interface so main.js
-//     treats both pools identically. Both expose setQualityScale and
-//     setFidelity; the in-shader chromatic lens (uLens) is always on at 0.4,
-//     because FPS caps reduce render frequency, never shader appearance.
+//     treats both pools identically. Both expose setQualityScale,
+//     setDisplayScale, setFidelity, and setLens; the in-shader chromatic lens
+//     (uLens) defaults to 0.4 and is an explicit on/off performance toggle,
+//     never changed by FPS caps (caps reduce render frequency only).
 //
 // Feature detection:
 //   initWebGPU() returns an engine or null; callers fall back to WebGL.
@@ -292,10 +293,13 @@ export class WebGPUOrbRenderer {
     this.accentC = [0, 0, 0];
     this.anchor = [0, 0, 0];
     this.qualityScale = 1;
+    this.displayScale = 1;
     this.fidelity = 1;
+    this.lens = 0.4;
     this.visible = true;
     this.lastWidth = 0;
     this.lastHeight = 0;
+    this.needsResize = true;
     this.bindGroup = null;
   }
 
@@ -322,6 +326,7 @@ export class WebGPUOrbRenderer {
     this.audio = 0;
     this.lastWidth = 0;
     this.lastHeight = 0;
+    this.needsResize = true;
     this.bindGroup = null;
   }
 
@@ -342,18 +347,39 @@ export class WebGPUOrbRenderer {
 
   setQualityScale(scale) {
     this.qualityScale = scale;
-    this.lastWidth = 0;
-    this.lastHeight = 0;
+    this.needsResize = true;
+  }
+
+  setDisplayScale(scale) {
+    this.displayScale = scale;
+    this.needsResize = true;
   }
 
   setFidelity(value) {
     this.fidelity = value;
   }
 
+  setLens(value) {
+    this.lens = value;
+  }
+
+  requestResize() {
+    this.needsResize = true;
+  }
+
   resize() {
+    // Layout reads (clientWidth/clientHeight) only happen when the backing
+    // store may have changed — window resize, quality/display-scale changes,
+    // setOrb moving a renderer to a different card, or the initial render — so
+    // a steady frame never touches layout (mirrors WebGL OrbRenderer.resize()).
+    if (!this.needsResize) return;
+    this.needsResize = false;
     const isCompact = this.engine.compactQuery?.matches ?? false;
     const maxPixelRatio = isCompact ? (this.engine.compactMaxDpr ?? 1.25) : 1.75;
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio) * this.qualityScale;
+    // The display scale is the renderer-level backing multiplier derived from
+    // the card's carousel scale, so CSS-scaled side orbs never render at full
+    // hero resolution; the center orb keeps display scale 1.
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio) * this.qualityScale * this.displayScale;
     const width = Math.max(1, Math.round(this.canvas.clientWidth * pixelRatio));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * pixelRatio));
     if (width === this.lastWidth && height === this.lastHeight) return;
@@ -384,7 +410,7 @@ export class WebGPUOrbRenderer {
       audio: this.audio,
       spin: this.spin + time * 0.08,
       arch: -1,
-      lens: 0.4,
+      lens: this.lens,
       starDensity: this.starDensity,
       fidelity: this.fidelity
     });

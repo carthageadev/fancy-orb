@@ -193,11 +193,13 @@ test("newly created WebGPU renderers are not wired to a low-power profile", () =
 
 // --- FPS caps preserve the lens uniform (source-level) ---
 
-test("WebGL uploadStaticUniforms keeps uLens at 0.4 for every FPS setting", () => {
+test("WebGL uploadStaticUniforms drives uLens from the lens state for every FPS setting", () => {
   const upload = extractMethod(mainSource, "uploadStaticUniforms");
   assert.ok(upload, "uploadStaticUniforms() body not found");
-  assert.match(upload, /this\.locations\.lens, 0\.4/, "uLens must stay on the normal lens value");
+  assert.match(upload, /this\.locations\.lens, this\.lens/, "uLens must be driven by the renderer lens state");
+  assert.doesNotMatch(upload, /0\.4/, "uploadStaticUniforms must not hardcode the lens value");
   assert.doesNotMatch(upload, /lowPower/, "uLens must not depend on any low-power state");
+  assert.match(mainSource, /const LENS_ON_VALUE = 0\.4/, "the on value must stay 0.4");
 });
 
 test("the WebGL renderer no longer exposes a setLowPower low-power profile", () => {
@@ -205,11 +207,12 @@ test("the WebGL renderer no longer exposes a setLowPower low-power profile", () 
   assert.doesNotMatch(mainSource, /lowPower/, "main.js must not reference any low-power profile");
 });
 
-test("WebGPU render keeps the lens at 0.4 for every FPS setting", () => {
+test("WebGPU render drives the lens from the lens state for every FPS setting", () => {
   const render = extractMethod(engineSource, "render");
   assert.ok(render, "render() body not found");
-  assert.match(render, /lens: 0\.4/, "uLens must stay on the normal lens value");
+  assert.match(render, /lens: this\.lens/, "uLens must be driven by the renderer lens state");
   assert.doesNotMatch(render, /lowPower/, "uLens must not depend on any low-power state");
+  assert.match(engineSource, /this\.lens = 0\.4/, "the default lens value must stay 0.4");
 });
 
 test("the WebGPU renderer no longer exposes a setLowPower low-power profile", () => {

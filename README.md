@@ -22,10 +22,18 @@ Opening `index.html` directly may work in some browsers, but a local server is t
 ## Render stacks
 
 The app can run either **WebGPU** (single device, one shared pipeline, one
-batched submission per frame) or **WebGL 1**. The Renderer control switches
-between them and persists the choice; the badge under the stage shows which
-stack is live. A WebGPU failure is reported instead of silently changing the
-backend.
+batched submission per frame) or **WebGL**. The WebGL path requests **WebGL 2**
+first and falls back to **WebGL 1**, then `experimental-webgl`; the GLSL ES 1.00
+shader source runs unchanged on either context family. The Renderer control
+switches between the stacks and persists the choice; the badge under the stage
+shows which stack is live, including the WebGL 2 vs WebGL 1 family. A WebGPU
+failure is reported instead of silently changing the backend.
+
+WebGL 2 is a capability and diagnostics improvement — the context is created
+WebGL 2-first when the browser supports it, and the badge and
+`window.__orbDebug().stack` report `webgl2` vs `webgl` — but it is **not a
+guaranteed FPS improvement**: both families execute the identical GLSL ES 1.00
+fragment pass.
 
 - `webgpu-engine.js` — batched WebGPU renderer: one dynamic-offset uniform
   buffer shared by every orb, all passes recorded in a single command
@@ -45,7 +53,7 @@ restrained highlight.
 ## Compatibility
 
 WebGPU is optional. With no explicit saved preference, compact/mobile devices
-start on WebGL 1 for compatibility and GPU budget; larger devices select
+start on WebGL for compatibility and GPU budget; larger devices select
 WebGPU only when the browser exposes `navigator.gpu` in a secure context.
 Stock Firefox for Android does not expose `navigator.gpu`, so it always runs
 the WebGL renderer: a stored or toggled WebGPU choice there is reported as
@@ -69,8 +77,15 @@ sustained headroom climbs back to 100%. Manual modes pin a fixed rung;
 compact/coarse-pointer devices start at the 70% rung; compact Auto stays
 capped there and can lower only after sustained lag, while desktop Auto adapts
 from 100% after the warmup window. Both renderers expose
-`setQualityScale()` and `setFidelity()`, so the manager drives either stack
-identically.
+`setQualityScale()`, `setDisplayScale()`, `setFidelity()`, and `setLens()`, so
+the manager drives either stack identically.
+
+Side cards are CSS-scaled by the carousel (`1` / `.62` / `.36`), so each
+assigned renderer also receives a matching **display scale** for its backing
+store: `1` for the center orb, `.62` for the near cards, and a floor of `.5`
+for the furthest visible cards. Off-hero orbs therefore never render at full
+hero pixel resolution, and both backends re-measure their backing store only
+when the display scale, window, or quality actually changes.
 
 The Render controls panel also offers `Auto`, `30`, `20`, and `15 FPS`. FPS
 caps preserve shader appearance and reduce work by rendering fewer frames:
@@ -84,10 +99,31 @@ inside the `requestAnimationFrame` callback, the achieved frame rate is
 approximate on displays whose refresh rate is not an exact multiple of the
 selected FPS.
 
+## Lens
+
+The hero fragment shader evaluates a chromatic lens near the rim (`uLens`,
+default `0.4`) by sampling separate RGB offsets for the dispersion effect. The
+**Lens** control (`#lens-setting`, values `on` / `off`, default `on`) toggles
+it on both stacks: `on` sets `uLens` to `0.4`, `off` sets it to `0`. Disabling
+the lens is an explicit, user-visible visual-quality tradeoff intended for A/B
+performance comparisons — losing the chromatic edge is expected, and the
+setting never interacts with FPS caps, which gate render frequency only.
+
+## Debug / performance overlay
+
+Append `?debug=1` to the URL, or check **Debug** (`#debug-setting`) in the
+render settings panel, to enable the performance overlay (`#perfDebugPanel`
+with its `#perfDebugOutput` `<pre>`). While enabled the overlay refreshes at
+most 4 times per second from `window.__orbDebug()` and shows the actual stack,
+FPS mode and interval, adaptive quality/EMA, lens state, the renderer count
+with per-orb display scales and canvas sizes, and WebGPU submission data when
+available. While disabled no timer runs and the frame/render hot paths contain
+no debug work.
+
 ## Tests
 
 ```powershell
-node --test "test/*.test.js"   # unit: spec parity, uniform layout, ladder, WGSL sanity
+node --test "test/*.test.js"   # unit: spec parity, uniform layout, ladder, WGSL sanity, WebGL2/display-scale/lens/debug wiring
 node test/smoke.mjs            # end-to-end: explicit mode + persistence smoke
 ```
 

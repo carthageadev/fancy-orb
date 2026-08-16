@@ -41,6 +41,10 @@ const renderSettings = document.querySelector("#renderSettings");
 const resolutionSetting = document.querySelector("#resolutionSetting");
 const fidelitySetting = document.querySelector("#fidelitySetting");
 const fpsSettingControl = document.querySelector("#fps-setting");
+const lensSettingControl = document.querySelector("#lens-setting");
+const debugSettingControl = document.querySelector("#debug-setting");
+const perfDebugPanel = document.querySelector("#perfDebugPanel");
+const perfDebugOutput = document.querySelector("#perfDebugOutput");
 
 let selectedIndex = 0;
 let paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -58,6 +62,26 @@ let stageInView = true;
 const startupStartedAt = performance.now();
 let rendererReadyAt = null;
 let firstRenderAt = null;
+
+// Lens toggle state. The `#lens-setting` select (values "on"/"off", default
+// "on") drives the in-shader chromatic lens (uLens 0.4). This is an explicit
+// visual-quality tradeoff for A/B comparisons; FPS caps reduce render
+// frequency only and never change the lens.
+const LENS_ON_VALUE = 0.4;
+const LENS_OFF_VALUE = 0;
+let lensEnabled = true;
+
+function getLensValue() {
+  return lensEnabled ? LENS_ON_VALUE : LENS_OFF_VALUE;
+}
+
+// Opt-in performance overlay. `?debug=1` opts in before the panel exists; the
+// `#debug-setting` checkbox toggles it at runtime. While disabled there is no
+// interval and no per-frame debug work.
+const DEBUG_UPDATE_INTERVAL_MS = 250; // at most 4 refreshes per second
+const debugOptIn = new URLSearchParams(window.location.search).get("debug") === "1";
+let debugOverlayEnabled = false;
+let debugIntervalId = null;
 
 function syncViewportMetrics() {
   const viewportHeight = Math.max(1, Math.round(window.visualViewport?.height || window.innerHeight));
@@ -135,7 +159,26 @@ function createWebGLContext(canvas) {
     preserveDrawingBuffer: new URLSearchParams(window.location.search).has("readback"),
     powerPreference: "high-performance"
   };
-  return canvas.getContext("webgl", attributes) || canvas.getContext("experimental-webgl", attributes);
+  // Capability-first: WebGL 2 when available, then WebGL 1, then the
+  // experimental fallback. The GLSL ES 1.00 shader source is context-agnostic
+  // and runs unchanged on either family. Each renderer gets a fresh canvas, so
+  // requesting webgl2 first can never block the webgl1 fallback, and the
+  // fallback happens entirely within renderer creation — there is no
+  // mid-session backend swap.
+  return canvas.getContext("webgl2", attributes)
+    || canvas.getContext("webgl", attributes)
+    || canvas.getContext("experimental-webgl", attributes);
+}
+
+function detectWebGLFamily(gl) {
+  // Robust family detection: prefer the constructor check, then probe a
+  // WebGL2-only API for runtimes where the context object crosses realms or
+  // the constructor is unavailable. WebGL 1 only exposes vertex-array objects
+  // through the OES_vertex_array_object extension, never createVertexArray.
+  const hasWebGL2Constructor = typeof WebGL2RenderingContext !== "undefined";
+  if (hasWebGL2Constructor && gl instanceof WebGL2RenderingContext) return "webgl2";
+  if (typeof gl.createVertexArray === "function") return "webgl2";
+  return "webgl";
 }
 
 const quadVertices = new Float32Array([
@@ -182,12 +225,15 @@ class OrbRenderer {
     this.contextLost = false;
     this.destroyed = false;
     this.qualityScale = quality.scale;
+    this.displayScale = 1;
     this.fidelity = fidelityValue;
+    this.lens = LENS_ON_VALUE;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
     if (!this.gl) {
       throw new Error("WebGL is required for orb-of-fate; no CSS fallback is provided.");
     }
+    this.contextFamily = detectWebGLFamily(this.gl);
     this.handleContextLost = (event) => {
       event.preventDefault();
       this.contextLost = true;
@@ -196,6 +242,10 @@ class OrbRenderer {
     this.handleContextRestored = () => {
       if (this.destroyed) return;
       this.contextLost = false;
+      // The browser reuses the same context object after a restore; re-run the
+      // family detection so the reported family always matches the live
+      // context and lens state is re-applied from this.lens.
+      this.contextFamily = detectWebGLFamily(this.gl);
       this.initializeGpu();
       this.lastWidth = 0;
       this.lastHeight = 0;
@@ -262,7 +312,7 @@ class OrbRenderer {
     gl.uniform1f(this.locations.phase, this.phase);
     gl.uniform1f(this.locations.audio, this.audio);
     gl.uniform1f(this.locations.archetype, -1);
-    gl.uniform1f(this.locations.lens, 0.4);
+    gl.uniform1f(this.locations.lens, this.lens);
     gl.uniform1f(this.locations.starDensity, this.starDensity);
     gl.uniform1f(this.locations.fidelity, this.fidelity);
   }
@@ -281,8 +331,18 @@ class OrbRenderer {
     this.needsResize = true;
   }
 
+  setDisplayScale(scale) {
+    this.displayScale = scale;
+    this.needsResize = true;
+  }
+
   setFidelity(value) {
     this.fidelity = value;
+    this.uploadStaticUniforms();
+  }
+
+  setLens(value) {
+    this.lens = value;
     this.uploadStaticUniforms();
   }
 
@@ -323,7 +383,11 @@ class OrbRenderer {
     this.needsResize = false;
     const isCompactDevice = compactDeviceQuery.matches;
     const maxPixelRatio = isCompactDevice ? 1.25 : 1.75;
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio) * this.qualityScale;
+    // The display scale is the renderer-level backing multiplier derived from
+    // the card's carousel scale (see assignVisibleRenderers): side cards render
+    // at a reduced backing resolution while the center orb stays at full
+    // quality scale. It is independent of the global adaptive quality scale.
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio) * this.qualityScale * this.displayScale;
     const width = Math.max(1, Math.round(this.canvas.clientWidth * pixelRatio));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * pixelRatio));
     if (width === this.lastWidth && height === this.lastHeight) return;
@@ -390,6 +454,15 @@ function applyFidelityMode(mode) {
   needsRender = true;
 }
 
+function applyLensSetting(value) {
+  // "off" disables the in-shader chromatic lens (uLens 0); anything else
+  // restores the normal lens (uLens 0.4). Applies to both renderer pools and
+  // never interacts with FPS caps, which gate render frequency only.
+  lensEnabled = value !== "off";
+  rendererPool.forEach((renderer) => renderer.setLens(getLensValue()));
+  needsRender = true;
+}
+
 function applyFpsSetting(value) {
   const normalized = isFpsSetting(value) ? value : FPS_DEFAULT;
   if (normalized === fpsSetting) return;
@@ -402,6 +475,53 @@ function applyFpsSetting(value) {
   needsRender = true;
   lastRenderAt = 0; // apply the new cadence on the next rAF
   quality.reset();
+}
+
+// --- opt-in performance overlay ---
+// The overlay is driven entirely by a 250 ms interval while enabled; the
+// frame/render hot paths never reference it. The output is built from the
+// existing window.__orbDebug() state, so there is exactly one source of truth.
+
+function formatDebugOverlay(state) {
+  const rendererLines = (state.renderers ?? []).map(
+    (renderer, index) =>
+      `  ${index}: canvas ${renderer.canvas?.[0] ?? 0}x${renderer.canvas?.[1] ?? 0} · display ${renderer.displayScale ?? 1}`
+  );
+  const lines = [
+    `stack: ${state.stack ?? "unknown"}`,
+    `mode: ${state.mode?.active ?? "none"}${state.mode?.requested && state.mode.requested !== state.mode.active ? ` (requested ${state.mode.requested})` : ""}`,
+    `fps: ${state.fps?.setting ?? "auto"} · interval ${state.fps?.intervalMs ?? 0}ms`,
+    `quality: ${state.quality?.label ?? "?"} (${state.quality?.scale ?? "?"}) · ema ${state.quality?.emaMs ?? "?"}ms`,
+    `lens: ${state.lens?.value ?? "?"} (${state.lens?.enabled ? "on" : "off"})`,
+    `renderers: ${(state.renderers ?? []).length}`,
+    ...rendererLines
+  ];
+  if (state.gpu) {
+    lines.push(`gpu: format ${state.gpu.format ?? "?"} · submissions ${state.gpu.submissions ?? 0} · passes ${state.gpu.renderPasses ?? 0}`);
+  }
+  return lines.join("\n");
+}
+
+function updateDebugOverlay() {
+  if (!perfDebugOutput) return;
+  const state = window.__orbDebug?.();
+  if (!state) return;
+  perfDebugOutput.textContent = formatDebugOverlay(state);
+}
+
+function applyDebugSetting(enabled) {
+  debugOverlayEnabled = Boolean(enabled);
+  if (debugSettingControl) debugSettingControl.checked = debugOverlayEnabled;
+  if (perfDebugPanel) perfDebugPanel.hidden = !debugOverlayEnabled;
+  if (debugOverlayEnabled) {
+    if (debugIntervalId === null) {
+      updateDebugOverlay();
+      debugIntervalId = window.setInterval(updateDebugOverlay, DEBUG_UPDATE_INTERVAL_MS);
+    }
+  } else if (debugIntervalId !== null) {
+    window.clearInterval(debugIntervalId);
+    debugIntervalId = null;
+  }
 }
 
 function setRenderSettingsOpen(isOpen) {
@@ -429,6 +549,18 @@ function setupRenderSettings() {
     applyFpsSetting(event.target.value);
   });
   applyFpsSetting(fpsSettingControl?.value);
+
+  lensSettingControl?.addEventListener("change", (event) => {
+    applyLensSetting(event.target.value);
+  });
+  applyLensSetting(lensSettingControl?.value ?? "on");
+
+  debugSettingControl?.addEventListener("change", (event) => {
+    applyDebugSetting(event.target.checked);
+  });
+  // Default off; only `?debug=1` opts in at load. The checkbox's checked state
+  // is synced to the resolved setting so the control never lies.
+  applyDebugSetting(debugOptIn);
 
   document.querySelector("#renderModeToggle")?.addEventListener("click", toggleRendererMode);
   updateRendererModeControl();
@@ -611,6 +743,14 @@ function reportModeStatus(badgeText) {
   updateRendererModeControl();
 }
 
+// Actual WebGL context family of the live pool ("webgl2" or "webgl"), used by
+// the final badges and window.__orbDebug().stack. All WebGL renderers share one
+// family because they go through the same capability-first context creation.
+function webglFamilyLabel() {
+  const liveRenderer = rendererPool.find((renderer) => typeof renderer.contextFamily === "string");
+  return liveRenderer ? liveRenderer.contextFamily : "webgl";
+}
+
 // Device loss / uncaptured validation errors only stop the WebGPU backend and
 // report it; they never silently start the other backend. The user picks the
 // next mode from the render settings control.
@@ -703,6 +843,7 @@ async function initializeWebGPU(token) {
           const renderer = new WebGPUOrbRenderer(engine, canvas, orbData[index], index);
           renderer.setQualityScale(quality.scale);
           renderer.setFidelity(fidelityValue);
+          renderer.setLens(getLensValue());
           rendererPool.push(renderer);
         }
         if (engine.failed) engineReady = false;
@@ -745,9 +886,10 @@ function scheduleRendererWork(callback) {
 function initializeRendererPool(token, index = 0) {
   if (token !== rendererLifecycleToken) return;
   if (index >= maxRendererPoolSize) {
+    const familyLabel = webglFamilyLabel();
     reportModeStatus(rendererInitializationFailed
-      ? "webgl / partial renderer"
-      : "webgl / hero glsl online");
+      ? `${familyLabel} / partial renderer`
+      : `${familyLabel} / hero glsl online`);
     if (token === rendererLifecycleToken && rendererPool.length > 0) activeMode = "webgl";
     updateRendererModeControl();
     updateLayout();
@@ -760,12 +902,13 @@ function initializeRendererPool(token, index = 0) {
     canvas.setAttribute("aria-hidden", "true");
     try {
       const renderer = new OrbRenderer(canvas, orbData[index], index);
+      renderer.setLens(getLensValue());
       rendererPool.push(renderer);
     } catch (error) {
       rendererInitializationFailed = true;
       console.error(`Could not initialize orb renderer ${index}.`, error);
     }
-    rendererBadge.textContent = `webgl / loading shader ${rendererPool.length}/${maxRendererPoolSize}`;
+    rendererBadge.textContent = `${webglFamilyLabel()} / loading shader ${rendererPool.length}/${maxRendererPoolSize}`;
     updateLayout();
     initializeRendererPool(token, index + 1);
   });
@@ -793,6 +936,14 @@ function updateMeta() {
   }));
 }
 
+// Side cards are CSS-scaled by the carousel (1 / .62 / .36), so rendering them
+// at full hero backing resolution wastes pixels the browser immediately
+// downscales. Each assigned renderer gets a display/backing scale derived from
+// its layout slot, clamped to DISPLAY_SCALE_FLOOR so off-hero orbs never drop
+// below half resolution. The center card keeps display scale 1 (full quality
+// scale). Independent of the global adaptive quality scale.
+const DISPLAY_SCALE_FLOOR = 0.5;
+
 function assignVisibleRenderers() {
   renderers.fill(null);
   rendererPool.forEach((renderer) => renderer.setVisible(false));
@@ -814,6 +965,9 @@ function assignVisibleRenderers() {
     if (renderer.canvas.parentElement !== visual) visual.append(renderer.canvas);
     renderer.setOrb(orbData[index], index);
     renderer.setVisible(true);
+    const absoluteDistance = Math.abs(circularDistance(index, selectedIndex, orbData.length));
+    const layoutScale = layoutByDistance[Math.min(absoluteDistance, 3)].scale;
+    renderer.setDisplayScale(Math.max(layoutScale, DISPLAY_SCALE_FLOOR));
     renderers[index] = renderer;
   });
 }
@@ -875,9 +1029,8 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("resize", () => {
   syncViewportMetrics();
   rendererPool.forEach((renderer) => {
-    // WebGL renderers only record that a re-measure is due; the next render()
-    // performs it. The WebGPU renderer has no requestResize, so it keeps
-    // resizing eagerly here.
+    // Both renderer families record that a re-measure is due; the next
+    // render() performs it. Steady frames never read layout.
     if (typeof renderer.requestResize === "function") renderer.requestResize();
     else renderer.resize();
   });
@@ -944,7 +1097,7 @@ function frame(now) {
 }
 
 window.__orbDebug = () => ({
-  stack: gpuEngine ? "webgpu" : "webgl",
+  stack: gpuEngine ? "webgpu" : webglFamilyLabel(),
   mode: {
     requested: requestedMode,
     active: activeMode
@@ -956,6 +1109,8 @@ window.__orbDebug = () => ({
     spin: renderer.spin?.toFixed(3),
     audio: renderer.audio,
     visible: renderer.visible,
+    contextFamily: renderer.contextFamily,
+    displayScale: renderer.displayScale,
     canvas: [renderer.canvas?.width, renderer.canvas?.height]
   })),
   gpu: gpuEngine
@@ -979,6 +1134,10 @@ window.__orbDebug = () => ({
     firstRenderMs: firstRenderAt === null ? null : +(firstRenderAt - startupStartedAt).toFixed(1)
   },
   fidelity: fidelityValue,
+  lens: {
+    enabled: lensEnabled,
+    value: getLensValue()
+  },
   fps: {
     setting: fpsSetting,
     intervalMs: +fpsIntervalMs.toFixed(2)

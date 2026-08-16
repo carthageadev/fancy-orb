@@ -82,6 +82,14 @@
               </select>
             </label>
 
+            <label class="render-setting" for="lens-setting">
+              <span>Lens</span>
+              <select id="lens-setting" aria-describedby="renderSettingsHint">
+                <option value="on" selected>On</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+
             <label class="render-setting" for="fps-setting">
               <span>Frame rate</span>
               <select id="fps-setting">
@@ -105,8 +113,14 @@
               </button>
             </div>
 
+            <label class="render-setting" for="debug-setting">
+              <span>Debug overlay</span>
+              <input type="checkbox" id="debug-setting" />
+            </label>
+
             <p class="render-settings-note" id="renderSettingsHint">
-              Auto lowers resolution only after sustained low FPS.
+              FPS caps preserve shader appearance — they only skip frames. Lens
+              Off is the optional visual tradeoff for lighter rendering.
             </p>
           </div>
         </div>
@@ -222,6 +236,16 @@
         <span>raw WebGL · no textures · no framework</span>
       </footer>
     </div>
+
+    <aside
+      class="perf-debug-panel"
+      id="perfDebugPanel"
+      aria-labelledby="perfDebugTitle"
+      hidden
+    >
+      <h2 id="perfDebugTitle">Performance</h2>
+      <pre id="perfDebugOutput"></pre>
+    </aside>
 
     <script type="module" src="./main.js"></script>
   </body>
