@@ -64,8 +64,13 @@ sustained headroom climbs back to 100%. Manual modes pin a fixed rung;
 compact/coarse-pointer devices start at the 70% rung; compact Auto stays
 capped there and can lower only after sustained lag, while desktop Auto adapts
 from 100% after the warmup window. Both renderers expose
-`setQualityScale()` and `setFidelity()`, so the manager drives either stack
-identically.
+`setQualityScale()`, `setFidelity()`, and `setLowPower()`, so the manager drives
+either stack identically. The Render controls panel also offers `Auto`, `30`,
+`20`, and `15 FPS`; capped modes skip intermediate animation frames and disable
+the expensive chromatic lens pass to reduce both render frequency and shader
+work on older phones. Because the cap is enforced inside the
+`requestAnimationFrame` callback, the achieved frame rate is approximate on
+displays whose refresh rate is not an exact multiple of the selected FPS.
 
 ## Tests
 

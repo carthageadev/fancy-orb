@@ -1,6 +1,6 @@
 import { highQualityFragmentShader, highQualityVertexShader } from "./high-quality-shaders.js";
 import { buildOrbSpec, specFromSeed, getSeedOffset, setSeedOffset } from "./orb-spec.js";
-import { QualityManager, FIDELITY_MODES } from "./quality.js";
+import { QualityManager, AUTO_BUDGET_MS, FIDELITY_MODES, FPS_DEFAULT, isFpsSetting, fpsToInterval, frameDue } from "./quality.js";
 
 // The active renderer pass is imported from high-quality-shaders.js above.
 const orbData = [
@@ -40,11 +40,19 @@ const brandSettingsToggle = document.querySelector("#brandSettingsToggle");
 const renderSettings = document.querySelector("#renderSettings");
 const resolutionSetting = document.querySelector("#resolutionSetting");
 const fidelitySetting = document.querySelector("#fidelitySetting");
+const fpsSettingControl = document.querySelector("#fps-setting");
 
 let selectedIndex = 0;
 let paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const compactDeviceQuery = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 let fidelityValue = 1;
+// Frame-rate cap state. Auto keeps the current behavior (render every rAF);
+// capped modes gate rendering by interval while absolute time still advances,
+// and enable the low-power lens profile on the renderers.
+let fpsSetting = FPS_DEFAULT;
+let fpsIntervalMs = 0; // per-render budget in ms; 0 = no cap (auto)
+let fpsLowPower = false; // caps disable the expensive lens/rim sampling
+let lastRenderAt = 0; // rAF timestamp of the last render; 0 = not rendered yet
 let needsRender = true;
 let stageInView = true;
 const startupStartedAt = performance.now();
@@ -175,6 +183,7 @@ class OrbRenderer {
     this.destroyed = false;
     this.qualityScale = quality.scale;
     this.fidelity = fidelityValue;
+    this.lowPower = fpsLowPower;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
     if (!this.gl) {
@@ -254,7 +263,7 @@ class OrbRenderer {
     gl.uniform1f(this.locations.phase, this.phase);
     gl.uniform1f(this.locations.audio, this.audio);
     gl.uniform1f(this.locations.archetype, -1);
-    gl.uniform1f(this.locations.lens, 0.4);
+    gl.uniform1f(this.locations.lens, this.lowPower ? 0 : 0.4);
     gl.uniform1f(this.locations.starDensity, this.starDensity);
     gl.uniform1f(this.locations.fidelity, this.fidelity);
   }
@@ -275,6 +284,11 @@ class OrbRenderer {
 
   setFidelity(value) {
     this.fidelity = value;
+    this.uploadStaticUniforms();
+  }
+
+  setLowPower(enabled) {
+    this.lowPower = Boolean(enabled);
     this.uploadStaticUniforms();
   }
 
@@ -382,6 +396,22 @@ function applyFidelityMode(mode) {
   needsRender = true;
 }
 
+function applyFpsSetting(value) {
+  const normalized = isFpsSetting(value) ? value : FPS_DEFAULT;
+  if (normalized === fpsSetting) return;
+  fpsSetting = normalized;
+  fpsIntervalMs = fpsToInterval(normalized);
+  fpsLowPower = fpsIntervalMs > 0;
+  // While a cap is active, the auto ladder's ceiling drops to the 70% rung so
+  // adaptive headroom cannot climb back to full resolution; manual resolution
+  // modes are unaffected. Clearing the cap restores the normal auto maximum.
+  quality.setFpsCeiling(fpsIntervalMs > 0);
+  rendererPool.forEach((renderer) => renderer.setLowPower(fpsLowPower));
+  needsRender = true;
+  lastRenderAt = 0; // apply the new cadence on the next rAF
+  quality.reset();
+}
+
 function setRenderSettingsOpen(isOpen) {
   if (!brandSettingsToggle || !renderSettings) return;
   renderSettings.hidden = !isOpen;
@@ -403,6 +433,11 @@ function setupRenderSettings() {
     applyFidelityMode(event.target.value);
   });
 
+  fpsSettingControl?.addEventListener("change", (event) => {
+    applyFpsSetting(event.target.value);
+  });
+  applyFpsSetting(fpsSettingControl?.value);
+
   document.querySelector("#renderModeToggle")?.addEventListener("click", toggleRendererMode);
   updateRendererModeControl();
 
@@ -416,7 +451,7 @@ function setupRenderSettings() {
 
 function updateAdaptiveQuality(frameMs, didRender) {
   if (!didRender || paused || document.hidden || !stageInView) return;
-  quality.sample(frameMs);
+  quality.sample(frameMs, fpsIntervalMs > 0 ? fpsIntervalMs : AUTO_BUDGET_MS);
 }
 
 function renderVisibleOrbs(time) {
@@ -641,6 +676,7 @@ async function initializeWebGPU(token) {
           const renderer = new WebGPUOrbRenderer(engine, canvas, orbData[index], index);
           renderer.setQualityScale(quality.scale);
           renderer.setFidelity(fidelityValue);
+          renderer.setLowPower(fpsLowPower);
           rendererPool.push(renderer);
         }
         if (engine.failed) engineReady = false;
@@ -697,7 +733,9 @@ function initializeRendererPool(token, index = 0) {
     const canvas = document.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
     try {
-      rendererPool.push(new OrbRenderer(canvas, orbData[index], index));
+      const renderer = new OrbRenderer(canvas, orbData[index], index);
+      renderer.setLowPower(fpsLowPower);
+      rendererPool.push(renderer);
     } catch (error) {
       rendererInitializationFailed = true;
       console.error(`Could not initialize orb renderer ${index}.`, error);
@@ -850,15 +888,29 @@ function frame(now) {
   if (!paused) {
     lastTime = typeof window.__orbFreezeTime === "number" ? window.__orbFreezeTime : now * 0.001;
   }
-  const frameMs = lastFrameNow ? now - lastFrameNow : 16.7;
+  const frameMs = lastFrameNow ? now - lastFrameNow : AUTO_BUDGET_MS;
   lastFrameNow = now;
-  const shouldRender = stageInView && !document.hidden && (!paused || needsRender);
+  // The cadence gate skips rendering work on in-between rAFs while time still
+  // advances and rAF keeps scheduling. `needsRender` survives skipped ticks,
+  // so an interaction settles on the next due frame. Auto (interval 0) is due
+  // every frame, preserving the current behavior.
+  const renderDue = frameDue(now, lastRenderAt, fpsIntervalMs);
+  const shouldRender = renderDue && stageInView && !document.hidden && (!paused || needsRender);
   let didRender = false;
-  try {
-    didRender = shouldRender ? renderVisibleOrbs(lastTime) : false;
-  } catch (error) {
-    console.error("Renderer frame failed:", error);
-    if (activeMode === "webgpu") handleWebGPUDeviceLost();
+  if (shouldRender) {
+    try {
+      didRender = renderVisibleOrbs(lastTime);
+      // The cadence anchor advances only after a render actually succeeds, so
+      // a frame that fails under a cap never consumes its interval.
+      if (didRender) lastRenderAt = now;
+    } catch (error) {
+      console.error("Renderer frame failed:", error);
+      // Reset the anchor so capped mode retries on the next rAF instead of
+      // waiting out the whole interval. Auto (interval 0) is unaffected — it
+      // is due every frame regardless.
+      lastRenderAt = 0;
+      if (activeMode === "webgpu") handleWebGPUDeviceLost();
+    }
   }
   if (didRender && firstRenderAt === null) firstRenderAt = performance.now();
   if (didRender) gpuEngine?.endFrame();
@@ -901,7 +953,12 @@ window.__orbDebug = () => ({
     rendererReadyMs: rendererReadyAt === null ? null : +(rendererReadyAt - startupStartedAt).toFixed(1),
     firstRenderMs: firstRenderAt === null ? null : +(firstRenderAt - startupStartedAt).toFixed(1)
   },
-  fidelity: fidelityValue
+  fidelity: fidelityValue,
+  fps: {
+    setting: fpsSetting,
+    intervalMs: +fpsIntervalMs.toFixed(2),
+    lowPower: fpsLowPower
+  }
 });
 
 window.requestAnimationFrame(frame);

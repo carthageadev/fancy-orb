@@ -106,6 +106,44 @@ test("compact Auto mode returns to the 70% baseline", () => {
   assert.equal(manager.scale, COMPACT_SCALE, "compact Auto must stay capped at 70%");
 });
 
+test("an active FPS cap caps the auto ladder at the 70% rung", () => {
+  const changes = [];
+  const manager = makeManager({ onLevelChange: (scale) => changes.push(scale) });
+  assert.equal(manager.scale, 1, "desktop starts at 100%");
+  manager.setFpsCeiling(true);
+  assert.equal(manager.scale, COMPACT_SCALE, "activating a cap must lower Auto immediately");
+  // Sustained headroom would normally climb back to 100%; under a cap the
+  // ladder must stop at the 70% rung instead.
+  for (let index = 0; index < 40; index += 1) manager.sample(8);
+  assert.equal(manager.scale, COMPACT_SCALE, "capped auto headroom must not climb past the 70% rung");
+  assert.deepEqual(changes, [0.7], "the climb clamps at the capped ceiling");
+});
+
+test("clearing the FPS cap restores the full auto maximum without a forced jump", () => {
+  const changes = [];
+  const manager = makeManager({ onLevelChange: (scale) => changes.push(scale) });
+  manager.setLevel(2);
+  changes.length = 0;
+  manager.setFpsCeiling(true);
+  manager.setFpsCeiling(false);
+  assert.deepEqual(changes, [], "clearing the cap must not move the level immediately");
+  for (let index = 0; index < 35; index += 1) manager.sample(8);
+  assert.deepEqual(changes, [0.84], "headroom recovers through the normal ladder");
+  for (let index = 0; index < 35; index += 1) manager.sample(8);
+  assert.deepEqual(changes, [0.84, 1], "the ladder climbs all the way back to 100%");
+});
+
+test("manual resolution modes remain authoritative under an active FPS cap", () => {
+  const manager = makeManager();
+  manager.setFpsCeiling(true);
+  manager.setMode("full");
+  assert.equal(manager.scale, 1, "manual full resolution must not be clamped by the cap");
+  for (let index = 0; index < 40; index += 1) manager.sample(8);
+  assert.equal(manager.scale, 1, "a pinned manual rung must not move under a cap");
+  manager.setMode("auto");
+  assert.equal(manager.scale, COMPACT_SCALE, "returning to auto under a cap lands on the capped ceiling");
+});
+
 test("the ladder never leaves its bounds", () => {
   const manager = makeManager();
   for (let index = 0; index < 200; index += 1) manager.sample(60);
