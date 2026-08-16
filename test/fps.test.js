@@ -1,6 +1,8 @@
 // Regression tests for the frame-rate cap (`fps-setting`): the pure cadence
 // helpers, the budget-aware quality sampling, and the main.js / renderer
-// wiring (source-level, same style as webgl-hotpath.test.js). No browser or
+// wiring (source-level, same style as webgl-hotpath.test.js). FPS caps gate
+// render frequency only — the uLens chromatic lens uniform stays 0.4 for
+// every setting, and no low-power profile is applied. No browser or
 // emulation launch required.
 
 import { readFileSync } from "node:fs";
@@ -92,6 +94,7 @@ test("the default budget keeps the original auto thresholds", () => {
 
 const mainSource = readFileSync(new URL("../main.js", import.meta.url), "utf8");
 const engineSource = readFileSync(new URL("../webgpu-engine.js", import.meta.url), "utf8");
+const stylesSource = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 // Extract the body of `name(` at the given indentation. Handles class methods
 // (2 spaces) and top-level functions, including `async function`. Braces are
@@ -121,21 +124,27 @@ test("main wires the #fps-setting select into applyFpsSetting", () => {
   assert.match(body, /applyFpsSetting\(event\.target\.value\)/);
 });
 
+test("mobile renderer settings wrap the renderer action instead of clipping it", () => {
+  assert.match(
+    stylesSource,
+    /@media \(max-width: 640px\)[\s\S]*\.render-mode-toggle\s*\{\s*flex-wrap:\s*wrap;/
+  );
+});
+
 test("main imports AUTO_BUDGET_MS from quality.js instead of duplicating 16.7", () => {
   assert.match(mainSource, /import \{[^}]*\bAUTO_BUDGET_MS\b[^}]*\} from "\.\/quality\.js"/);
   assert.match(mainSource, /fpsIntervalMs > 0 \? fpsIntervalMs : AUTO_BUDGET_MS/);
 });
 
-test("applyFpsSetting normalizes, caps, and applies the low-power profile", () => {
+test("applyFpsSetting normalizes the cadence and the auto ceiling without a low-power profile", () => {
   const apply = extractMethod(mainSource, "applyFpsSetting", 0);
   assert.ok(apply, "applyFpsSetting() body not found");
   assert.match(apply, /isFpsSetting\(value\)/);
   assert.match(apply, /fpsIntervalMs = fpsToInterval\(normalized\)/);
-  assert.match(apply, /fpsLowPower = fpsIntervalMs > 0/);
   assert.match(apply, /quality\.setFpsCeiling\(fpsIntervalMs > 0\)/, "a cap must lower the auto ceiling");
-  assert.match(apply, /renderer\.setLowPower\(fpsLowPower\)/);
-  assert.match(apply, /lastRenderAt = 0/);
+  assert.match(apply, /lastRenderAt = 0/, "the new cadence must apply on the next rAF");
   assert.match(apply, /needsRender = true/);
+  assert.doesNotMatch(apply, /fpsLowPower|setLowPower/, "caps must not touch any low-power profile");
 });
 
 test("the frame loop gates rendering by the cadence while time keeps advancing", () => {
@@ -167,45 +176,49 @@ test("updateAdaptiveQuality hands the capped budget to the ladder", () => {
   assert.match(update, /quality\.sample\(frameMs, fpsIntervalMs > 0 \? fpsIntervalMs : AUTO_BUDGET_MS\)/);
 });
 
-test("newly created WebGL renderers receive the current low-power state", () => {
+test("newly created WebGL renderers are not wired to a low-power profile", () => {
   const init = extractMethod(mainSource, "initializeRendererPool", 0);
   assert.ok(init, "initializeRendererPool() body not found");
   assert.match(init, /new OrbRenderer\(canvas, orbData\[index\], index\)/);
-  assert.match(init, /renderer\.setLowPower\(fpsLowPower\)/);
-  assert.match(mainSource, /this\.lowPower = fpsLowPower;/, "constructor must read the module state");
+  assert.doesNotMatch(init, /setLowPower/, "renderer creation must not apply an FPS low-power profile");
+  assert.doesNotMatch(mainSource, /fpsLowPower/, "module state must not track an FPS low-power flag");
 });
 
-test("newly created WebGPU renderers receive the current low-power state", () => {
+test("newly created WebGPU renderers are not wired to a low-power profile", () => {
   const init = extractMethod(mainSource, "initializeWebGPU", 0);
   assert.ok(init, "initializeWebGPU() body not found");
   assert.match(init, /renderer\.setFidelity\(fidelityValue\)/);
-  assert.match(init, /renderer\.setLowPower\(fpsLowPower\)/);
+  assert.doesNotMatch(init, /setLowPower/, "renderer creation must not apply an FPS low-power profile");
 });
 
-// --- low-power uniform behavior (source-level) ---
+// --- FPS caps preserve the lens uniform (source-level) ---
 
-test("WebGL uploadStaticUniforms drives uLens from the low-power state", () => {
+test("WebGL uploadStaticUniforms keeps uLens at 0.4 for every FPS setting", () => {
   const upload = extractMethod(mainSource, "uploadStaticUniforms");
   assert.ok(upload, "uploadStaticUniforms() body not found");
-  assert.match(upload, /this\.locations\.lens, this\.lowPower \? 0 : 0\.4/);
+  assert.match(upload, /this\.locations\.lens, 0\.4/, "uLens must stay on the normal lens value");
+  assert.doesNotMatch(upload, /lowPower/, "uLens must not depend on any low-power state");
 });
 
-test("WebGL setLowPower re-applies the static uniforms", () => {
-  const setLowPower = extractMethod(mainSource, "setLowPower");
-  assert.ok(setLowPower, "setLowPower() body not found");
-  assert.match(setLowPower, /this\.lowPower = Boolean\(enabled\)/);
-  assert.match(setLowPower, /uploadStaticUniforms\(\)/);
+test("the WebGL renderer no longer exposes a setLowPower low-power profile", () => {
+  assert.doesNotMatch(mainSource, /setLowPower/, "main.js must not define or call setLowPower");
+  assert.doesNotMatch(mainSource, /lowPower/, "main.js must not reference any low-power profile");
 });
 
-test("WebGPU render drives uLens from the low-power state", () => {
+test("WebGPU render keeps the lens at 0.4 for every FPS setting", () => {
   const render = extractMethod(engineSource, "render");
   assert.ok(render, "render() body not found");
-  assert.match(render, /lens: this\.lowPower \? 0 : 0\.4/);
+  assert.match(render, /lens: 0\.4/, "uLens must stay on the normal lens value");
+  assert.doesNotMatch(render, /lowPower/, "uLens must not depend on any low-power state");
 });
 
-test("WebGPU renderer exposes the same setLowPower setter contract as WebGL", () => {
-  const setLowPower = extractMethod(engineSource, "setLowPower");
-  assert.ok(setLowPower, "setLowPower() body not found");
-  assert.match(setLowPower, /this\.lowPower = Boolean\(enabled\)/);
-  assert.match(engineSource, /this\.lowPower = false;/, "constructor must initialize lowPower");
+test("the WebGPU renderer no longer exposes a setLowPower low-power profile", () => {
+  assert.doesNotMatch(engineSource, /setLowPower/, "webgpu-engine.js must not define or call setLowPower");
+  assert.doesNotMatch(engineSource, /lowPower/, "webgpu-engine.js must not reference any low-power profile");
+});
+
+test("the debug fps report keeps setting and intervalMs without a lowPower flag", () => {
+  assert.match(mainSource, /setting: fpsSetting/);
+  assert.match(mainSource, /intervalMs: \+fpsIntervalMs\.toFixed\(2\)/);
+  assert.doesNotMatch(mainSource, /lowPower: fpsLowPower/);
 });

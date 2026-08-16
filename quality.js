@@ -13,17 +13,16 @@
 //
 // The frame-rate cap (the `fps-setting` select) is a sibling policy: Auto
 // renders every rAF as today, while 30/20/15 render on a coarser cadence and
-// switch the renderers into their low-power lens profile (see main.js). The
-// ladder keeps sampling under a cap by scaling its slow/fast thresholds to
-// the capped per-render budget, so a device that holds the cap looks healthy
-// and one that misses it still walks down. While a cap is active, the auto
-// ladder's ceiling also drops to the 70% rung, so healthy frames under a cap
-// cannot climb back to full resolution and erase the pixel savings; manual
-// resolution modes stay authoritative and are never clamped.
+// preserve shader appearance. The ladder keeps sampling under a cap by scaling
+// its slow/fast thresholds to the capped per-render budget, so a device that
+// holds the cap looks healthy and one that misses it still walks down. While a
+// cap is active, the auto ladder's ceiling also drops to the 70% rung, so
+// healthy frames under a cap cannot climb back to full resolution and erase
+// the pixel savings; manual resolution modes stay authoritative and are never
+// clamped. Fidelity remains the explicit visual-quality tradeoff.
 //
 // Both renderers (WebGL and WebGPU) implement setQualityScale(scale),
-// setFidelity(value) and setLowPower(enabled), so the manager drives both
-// stacks identically.
+// and setFidelity(value), so the manager drives both stacks identically.
 
 export const QUALITY_LEVELS = [0.5, 0.58, 0.7, 0.84, 1];
 

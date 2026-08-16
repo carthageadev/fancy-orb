@@ -7,9 +7,9 @@
 //   * uniforms live in one big dynamic-offset buffer: switching orbs is just
 //     a dynamic offset change, no pipeline/bind-group churn
 //   * WebGPUOrbRenderer mirrors the WebGL OrbRenderer interface so main.js
-//     treats both pools identically. Both expose setQualityScale, setFidelity
-//     and setLowPower; the last one drops the lens/rim work by writing 0 to
-//     the existing uLens uniform (the shader short-circuits on it).
+//     treats both pools identically. Both expose setQualityScale and
+//     setFidelity; the in-shader chromatic lens (uLens) is always on at 0.4,
+//     because FPS caps reduce render frequency, never shader appearance.
 //
 // Feature detection:
 //   initWebGPU() returns an engine or null; callers fall back to WebGL.
@@ -293,7 +293,6 @@ export class WebGPUOrbRenderer {
     this.anchor = [0, 0, 0];
     this.qualityScale = 1;
     this.fidelity = 1;
-    this.lowPower = false;
     this.visible = true;
     this.lastWidth = 0;
     this.lastHeight = 0;
@@ -351,10 +350,6 @@ export class WebGPUOrbRenderer {
     this.fidelity = value;
   }
 
-  setLowPower(enabled) {
-    this.lowPower = Boolean(enabled);
-  }
-
   resize() {
     const isCompact = this.engine.compactQuery?.matches ?? false;
     const maxPixelRatio = isCompact ? (this.engine.compactMaxDpr ?? 1.25) : 1.75;
@@ -389,7 +384,7 @@ export class WebGPUOrbRenderer {
       audio: this.audio,
       spin: this.spin + time * 0.08,
       arch: -1,
-      lens: this.lowPower ? 0 : 0.4,
+      lens: 0.4,
       starDensity: this.starDensity,
       fidelity: this.fidelity
     });

@@ -892,6 +892,10 @@ a {
     width: min(252px, calc(100vw - 28px));
   }
 
+  .render-mode-toggle {
+    flex-wrap: wrap;
+  }
+
   .topbar-actions {
     min-width: 0;
     gap: 0;

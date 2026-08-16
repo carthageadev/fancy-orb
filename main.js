@@ -47,11 +47,11 @@ let paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const compactDeviceQuery = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 let fidelityValue = 1;
 // Frame-rate cap state. Auto keeps the current behavior (render every rAF);
-// capped modes gate rendering by interval while absolute time still advances,
-// and enable the low-power lens profile on the renderers.
+// capped modes gate rendering by interval while absolute time still advances.
+// Caps reduce render frequency only: the shader — chromatic lens, rim, and
+// specular passes — renders identically at every FPS setting.
 let fpsSetting = FPS_DEFAULT;
 let fpsIntervalMs = 0; // per-render budget in ms; 0 = no cap (auto)
-let fpsLowPower = false; // caps disable the expensive lens/rim sampling
 let lastRenderAt = 0; // rAF timestamp of the last render; 0 = not rendered yet
 let needsRender = true;
 let stageInView = true;
@@ -183,7 +183,6 @@ class OrbRenderer {
     this.destroyed = false;
     this.qualityScale = quality.scale;
     this.fidelity = fidelityValue;
-    this.lowPower = fpsLowPower;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
     if (!this.gl) {
@@ -263,7 +262,7 @@ class OrbRenderer {
     gl.uniform1f(this.locations.phase, this.phase);
     gl.uniform1f(this.locations.audio, this.audio);
     gl.uniform1f(this.locations.archetype, -1);
-    gl.uniform1f(this.locations.lens, this.lowPower ? 0 : 0.4);
+    gl.uniform1f(this.locations.lens, 0.4);
     gl.uniform1f(this.locations.starDensity, this.starDensity);
     gl.uniform1f(this.locations.fidelity, this.fidelity);
   }
@@ -284,11 +283,6 @@ class OrbRenderer {
 
   setFidelity(value) {
     this.fidelity = value;
-    this.uploadStaticUniforms();
-  }
-
-  setLowPower(enabled) {
-    this.lowPower = Boolean(enabled);
     this.uploadStaticUniforms();
   }
 
@@ -401,12 +395,10 @@ function applyFpsSetting(value) {
   if (normalized === fpsSetting) return;
   fpsSetting = normalized;
   fpsIntervalMs = fpsToInterval(normalized);
-  fpsLowPower = fpsIntervalMs > 0;
   // While a cap is active, the auto ladder's ceiling drops to the 70% rung so
   // adaptive headroom cannot climb back to full resolution; manual resolution
   // modes are unaffected. Clearing the cap restores the normal auto maximum.
   quality.setFpsCeiling(fpsIntervalMs > 0);
-  rendererPool.forEach((renderer) => renderer.setLowPower(fpsLowPower));
   needsRender = true;
   lastRenderAt = 0; // apply the new cadence on the next rAF
   quality.reset();
@@ -676,7 +668,6 @@ async function initializeWebGPU(token) {
           const renderer = new WebGPUOrbRenderer(engine, canvas, orbData[index], index);
           renderer.setQualityScale(quality.scale);
           renderer.setFidelity(fidelityValue);
-          renderer.setLowPower(fpsLowPower);
           rendererPool.push(renderer);
         }
         if (engine.failed) engineReady = false;
@@ -734,7 +725,6 @@ function initializeRendererPool(token, index = 0) {
     canvas.setAttribute("aria-hidden", "true");
     try {
       const renderer = new OrbRenderer(canvas, orbData[index], index);
-      renderer.setLowPower(fpsLowPower);
       rendererPool.push(renderer);
     } catch (error) {
       rendererInitializationFailed = true;
@@ -956,8 +946,7 @@ window.__orbDebug = () => ({
   fidelity: fidelityValue,
   fps: {
     setting: fpsSetting,
-    intervalMs: +fpsIntervalMs.toFixed(2),
-    lowPower: fpsLowPower
+    intervalMs: +fpsIntervalMs.toFixed(2)
   }
 });
 

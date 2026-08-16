@@ -64,13 +64,20 @@ sustained headroom climbs back to 100%. Manual modes pin a fixed rung;
 compact/coarse-pointer devices start at the 70% rung; compact Auto stays
 capped there and can lower only after sustained lag, while desktop Auto adapts
 from 100% after the warmup window. Both renderers expose
-`setQualityScale()`, `setFidelity()`, and `setLowPower()`, so the manager drives
-either stack identically. The Render controls panel also offers `Auto`, `30`,
-`20`, and `15 FPS`; capped modes skip intermediate animation frames and disable
-the expensive chromatic lens pass to reduce both render frequency and shader
-work on older phones. Because the cap is enforced inside the
-`requestAnimationFrame` callback, the achieved frame rate is approximate on
-displays whose refresh rate is not an exact multiple of the selected FPS.
+`setQualityScale()` and `setFidelity()`, so the manager drives either stack
+identically.
+
+The Render controls panel also offers `Auto`, `30`, `20`, and `15 FPS`. FPS
+caps preserve shader appearance and reduce work by rendering fewer frames:
+capped modes skip intermediate animation frames while absolute time keeps
+advancing, and the auto ladder's ceiling drops to the 70% rung so adaptive
+headroom cannot climb back while the cap is active (manual resolution modes
+stay authoritative). They never change the shader — the chromatic lens, rim,
+and specular passes render identically at every FPS setting; **Fidelity Lite**
+remains the explicit visual-quality tradeoff. Because the cap is enforced
+inside the `requestAnimationFrame` callback, the achieved frame rate is
+approximate on displays whose refresh rate is not an exact multiple of the
+selected FPS.
 
 ## Tests
 
