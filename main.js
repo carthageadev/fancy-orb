@@ -117,11 +117,15 @@ function getFragmentShaderSource(gl) {
 function createWebGLContext(canvas) {
   const attributes = {
     alpha: false,
-    antialias: true,
+    // The scene is one fullscreen shader quad: polygon-edge MSAA can never
+    // affect the output, so disable it and skip the multisample framebuffer
+    // allocation. Unknown attributes (like powerPreference on older browsers)
+    // are ignored gracefully by the context factory.
+    antialias: false,
     depth: false,
     premultipliedAlpha: false,
     preserveDrawingBuffer: new URLSearchParams(window.location.search).has("readback"),
-    powerPreference: "default"
+    powerPreference: "high-performance"
   };
   return canvas.getContext("webgl", attributes) || canvas.getContext("experimental-webgl", attributes);
 }
@@ -132,6 +136,10 @@ const quadVertices = new Float32Array([
   -1, 1, 0, 0,
   1, 1, 1, 0
 ]);
+
+// Constant scene background (uBg). Shared across renderers and never mutated,
+// so it can be allocated once at module load instead of per frame.
+const backgroundUniform = new Float32Array([0, 0, 0]);
 
 function createProgram(gl) {
   const vertexShader = compileShader(gl, gl.VERTEX_SHADER, highQualityVertexShader);
@@ -161,6 +169,7 @@ class OrbRenderer {
     this.locations = null;
     this.lastWidth = 0;
     this.lastHeight = 0;
+    this.needsResize = true;
     this.visible = true;
     this.contextLost = false;
     this.destroyed = false;
@@ -217,10 +226,42 @@ class OrbRenderer {
     gl.clearColor(0, 0, 0, 1);
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
+    // Static GL state: program, quad buffer and vertex layout never change
+    // between draws, so bind them once here. initializeGpu() runs again after
+    // a context restore, which is exactly when this state must be rebuilt.
+    gl.useProgram(this.program);
+    gl.enableVertexAttribArray(this.locations.position);
+    gl.vertexAttribPointer(this.locations.position, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(this.locations.uv);
+    gl.vertexAttribPointer(this.locations.uv, 2, gl.FLOAT, false, 16, 8);
+    this.uploadStaticUniforms();
+    // Initial render (and any render after a context restore) must re-measure
+    // the backing store and re-upload uRes.
+    this.needsResize = true;
+  }
+
+  uploadStaticUniforms() {
+    const gl = this.gl;
+    if (!gl || !this.locations) return;
+    // Static/per-orb uniforms. Called from initializeGpu() after program
+    // creation and from setOrb/setSelected/setSeed/setFidelity whenever one of
+    // them changes, so the values are always current for the bound program.
+    gl.uniform3fv(this.locations.background, backgroundUniform);
+    gl.uniform3fv(this.locations.anchor, this.anchor);
+    gl.uniform3fv(this.locations.color0, this.accentA);
+    gl.uniform3fv(this.locations.color1, this.accentB);
+    gl.uniform3fv(this.locations.color2, this.accentC);
+    gl.uniform1f(this.locations.phase, this.phase);
+    gl.uniform1f(this.locations.audio, this.audio);
+    gl.uniform1f(this.locations.archetype, -1);
+    gl.uniform1f(this.locations.lens, 0.4);
+    gl.uniform1f(this.locations.starDensity, this.starDensity);
+    gl.uniform1f(this.locations.fidelity, this.fidelity);
   }
 
   setSelected(isSelected) {
     this.audio = isSelected ? 0.035 : 0;
+    this.uploadStaticUniforms();
   }
 
   setVisible(isVisible) {
@@ -229,12 +270,12 @@ class OrbRenderer {
 
   setQualityScale(scale) {
     this.qualityScale = scale;
-    this.lastWidth = 0;
-    this.lastHeight = 0;
+    this.needsResize = true;
   }
 
   setFidelity(value) {
     this.fidelity = value;
+    this.uploadStaticUniforms();
   }
 
   setOrb(data, index) {
@@ -245,13 +286,13 @@ class OrbRenderer {
     this.phase = spec.phase;
     this.spin = spec.spin;
     this.starDensity = spec.starDensity;
-    this.accentA = spec.accentA;
-    this.accentB = spec.accentB;
-    this.accentC = spec.accentC;
-    this.anchor = spec.anchor;
+    this.accentA = new Float32Array(spec.accentA);
+    this.accentB = new Float32Array(spec.accentB);
+    this.accentC = new Float32Array(spec.accentC);
+    this.anchor = new Float32Array(spec.anchor);
     this.audio = 0;
-    this.lastWidth = 0;
-    this.lastHeight = 0;
+    this.needsResize = true;
+    this.uploadStaticUniforms();
   }
 
   setSeed(seed) {
@@ -259,9 +300,19 @@ class OrbRenderer {
     const motion = specFromSeed(this.data, seed);
     this.phase = motion.phase;
     this.spin = motion.spin;
+    this.uploadStaticUniforms();
+  }
+
+  requestResize() {
+    this.needsResize = true;
   }
 
   resize() {
+    // Layout reads (clientWidth/clientHeight) only happen when the backing
+    // store may have changed: window resize, quality change, setOrb moving a
+    // renderer to a different card, the initial render, or a context restore.
+    if (!this.needsResize) return;
+    this.needsResize = false;
     const isCompactDevice = compactDeviceQuery.matches;
     const maxPixelRatio = isCompactDevice ? 1.25 : 1.75;
     const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio) * this.qualityScale;
@@ -273,6 +324,7 @@ class OrbRenderer {
     this.lastWidth = width;
     this.lastHeight = height;
     this.gl.viewport(0, 0, width, height);
+    this.gl.uniform2f(this.locations.resolution, width, height);
   }
 
   render(time) {
@@ -282,26 +334,11 @@ class OrbRenderer {
     if (contextLost) return false;
     this.resize();
     const gl = this.gl;
-    gl.useProgram(this.program);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    gl.enableVertexAttribArray(this.locations.position);
-    gl.vertexAttribPointer(this.locations.position, 2, gl.FLOAT, false, 16, 0);
-    gl.enableVertexAttribArray(this.locations.uv);
-    gl.vertexAttribPointer(this.locations.uv, 2, gl.FLOAT, false, 16, 8);
-    gl.uniform2f(this.locations.resolution, this.canvas.width, this.canvas.height);
-    gl.uniform3fv(this.locations.background, [0, 0, 0]);
-    gl.uniform3fv(this.locations.anchor, this.anchor);
-    gl.uniform3fv(this.locations.color0, this.accentA);
-    gl.uniform3fv(this.locations.color1, this.accentB);
-    gl.uniform3fv(this.locations.color2, this.accentC);
+    // Per-frame uniforms only: time and the animated spin. Everything else is
+    // static GL state or an unchanged uniform re-uploaded by the setters and
+    // initializeGpu().
     gl.uniform1f(this.locations.time, time);
-    gl.uniform1f(this.locations.phase, this.phase);
-    gl.uniform1f(this.locations.audio, this.audio);
     gl.uniform1f(this.locations.spin, this.spin + time * 0.08);
-    gl.uniform1f(this.locations.archetype, -1);
-    gl.uniform1f(this.locations.lens, 0.4);
-    gl.uniform1f(this.locations.starDensity, this.starDensity);
-    gl.uniform1f(this.locations.fidelity, this.fidelity);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
   }
@@ -774,7 +811,13 @@ window.addEventListener("keydown", (event) => {
 });
 window.addEventListener("resize", () => {
   syncViewportMetrics();
-  rendererPool.forEach((renderer) => renderer.resize());
+  rendererPool.forEach((renderer) => {
+    // WebGL renderers only record that a re-measure is due; the next render()
+    // performs it. The WebGPU renderer has no requestResize, so it keeps
+    // resizing eagerly here.
+    if (typeof renderer.requestResize === "function") renderer.requestResize();
+    else renderer.resize();
+  });
   needsRender = true;
   quality.reset();
 });
