@@ -46,12 +46,17 @@ restrained highlight.
 
 WebGPU is optional. With no explicit saved preference, compact/mobile devices
 start on WebGL 1 for compatibility and GPU budget; larger devices select
-WebGPU only when the browser exposes `navigator.gpu`. The renderer control
-lets you switch explicitly and persists that choice. A requested
-WebGPU mode that is unavailable, loses its device, or fails validation does
-not silently switch back: the badge reports the state and the control lets
-you choose WebGL. This keeps Chrome, Edge, Safari, Firefox, mobile, and
-insecure-context behavior testable without hiding which backend is active.
+WebGPU only when the browser exposes `navigator.gpu` in a secure context.
+Stock Firefox for Android does not expose `navigator.gpu`, so it always runs
+the WebGL renderer: a stored or toggled WebGPU choice there is reported as
+unsupported and WebGL remains active (the stored preference is preserved for
+browsers that do support WebGPU). WebGPU also requires browser support plus a
+secure context (`https:` or `localhost`). The renderer control lets you switch
+explicitly and persists that choice. A requested WebGPU mode that is
+unavailable, loses its device, or fails validation does not silently switch
+back: the badge reports the state and the control lets you choose WebGL. This
+keeps Chrome, Edge, Safari, Firefox, mobile, and insecure-context behavior
+testable without hiding which backend is active.
 
 No optional WebGPU features are requested, and the shader uses core WGSL
 constructs only.

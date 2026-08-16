@@ -258,7 +258,7 @@ export function createRenderPipeline(device, descriptor) {
 }
 
 export async function initWebGPU() {
-  if (!navigator.gpu) return null;
+  if (typeof navigator === "undefined" || !navigator.gpu) return null;
   try {
     const adapter = await withTimeout(navigator.gpu.requestAdapter(), 5000);
     if (!adapter) return null;

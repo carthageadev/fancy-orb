@@ -512,6 +512,10 @@ function otherRenderMode(mode) {
   return mode === "webgpu" ? "webgl" : "webgpu";
 }
 
+function hasWebGPUSupport() {
+  return typeof navigator !== "undefined" && Boolean(navigator.gpu);
+}
+
 function readStoredRenderMode() {
   try {
     const stored = window.localStorage.getItem(RENDER_MODE_STORAGE_KEY);
@@ -546,13 +550,20 @@ function hasForceWebGLOverride() {
 function resolveDefaultRenderMode() {
   if (hasForceWebGLOverride()) return "webgl";
   const stored = readStoredRenderMode();
-  if (isRenderMode(stored) && (!compactDeviceQuery.matches || hasExplicitStoredRenderMode())) return stored;
+  if (isRenderMode(stored) && (!compactDeviceQuery.matches || hasExplicitStoredRenderMode())) {
+    // A stored WebGPU preference only applies where the API exists. On
+    // browsers without navigator.gpu (stock Firefox for Android) start WebGL
+    // instead, but keep the stored preference intact so a later browser that
+    // supports WebGPU honors it again.
+    if (stored === "webgpu" && !hasWebGPUSupport()) return "webgl";
+    return stored;
+  }
   // Compact/mobile devices start on WebGL: it is the broadly supported,
   // lower-risk path there. The renderer toggle still allows explicit WebGPU
   // testing on devices that expose it.
   if (compactDeviceQuery.matches) return "webgl";
   // No stored preference: prefer WebGPU on larger devices where it exists.
-  return typeof navigator !== "undefined" && navigator.gpu ? "webgpu" : "webgl";
+  return hasWebGPUSupport() ? "webgpu" : "webgl";
 }
 
 function updateRendererModeControl() {
@@ -612,6 +623,16 @@ function handleWebGPUDeviceLost() {
 
 async function switchRendererMode(mode, options = {}) {
   const normalized = isRenderMode(mode) ? mode : "webgl";
+  // Preflight explicit WebGPU requests before touching any lifecycle state: on
+  // a browser without navigator.gpu (stock Firefox for Android) the request is
+  // reported without tearing down the working WebGL pool, persisting a choice
+  // that cannot be honored, or bumping the renderer lifecycle token.
+  if (normalized === "webgpu" && !hasWebGPUSupport()) {
+    reportModeStatus(isRenderMode(activeMode)
+      ? "webgpu / unsupported in this browser — WebGL remains active"
+      : "webgpu / unsupported in this browser — choose WebGL");
+    return;
+  }
   const token = ++rendererLifecycleToken;
   requestedMode = normalized;
   if (options.persist !== false) writeStoredRenderMode(normalized);
@@ -628,9 +649,19 @@ async function switchRendererMode(mode, options = {}) {
 }
 
 async function initializeWebGPU(token) {
+  // Defensive preflight: switchRendererMode already rejects unsupported
+  // requests before any teardown, but a direct/stale call must not tear down
+  // a working pool either.
+  if (!hasWebGPUSupport()) {
+    if (token !== rendererLifecycleToken) return;
+    reportModeStatus(isRenderMode(activeMode)
+      ? "webgpu / unsupported in this browser — WebGL remains active"
+      : "webgpu / unsupported in this browser — choose WebGL");
+    return;
+  }
   let engine = null;
   try {
-    const { initWebGPU, WebGPUOrbRenderer } = await import("./webgpu-engine.js");
+    const { initWebGPU, WebGPUOrbRenderer, withTimeout } = await import("./webgpu-engine.js");
     if (token !== rendererLifecycleToken) return;
     engine = await initWebGPU();
     if (token !== rendererLifecycleToken) {
@@ -651,9 +682,13 @@ async function initializeWebGPU(token) {
     let engineReady = false;
     if (!engine.failed) {
       try {
-        await engine.initialize();
+        // Bound the settle time: pipeline construction can wedge forever on
+        // some Firefox/WebGPU setups. withTimeout resolves undefined on
+        // success (initialize() resolves undefined) and null on timeout or
+        // rejection, so a non-null settled value means the pipeline came up.
+        const engineInitResult = await withTimeout(engine.initialize(), 5000);
         if (token !== rendererLifecycleToken) return;
-        engineReady = !engine.failed;
+        engineReady = engineInitResult !== null && !engine.failed;
       } catch (error) {
         if (token === rendererLifecycleToken) console.error("WebGPU initialization failed:", error);
       }
