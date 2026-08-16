@@ -10,6 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 const mainSource = readFileSync(new URL("../main.js", import.meta.url), "utf8");
+const stylesSource = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 // Extract the body of `name(` at the given indentation (class methods use 2
 // spaces, top-level functions use 0 with an optional `function ` prefix).
@@ -57,6 +58,15 @@ test("createWebGLContext disables MSAA and requests the high-performance GPU", (
   assert.match(body, /antialias: false/);
   assert.doesNotMatch(body, /antialias: true/);
   assert.match(body, /powerPreference: "high-performance"/);
+});
+
+test("orb visuals explicitly clip the WebGL canvas to a circle", () => {
+  const block = stylesSource.match(/\.orb-visual\s*\{[\s\S]*?\n\}/)?.[0];
+  assert.ok(block, ".orb-visual CSS block not found");
+  assert.match(block, /overflow:\s*hidden/);
+  assert.match(block, /border-radius:\s*50%/);
+  assert.match(block, /-webkit-clip-path:\s*circle\(50% at 50% 50%\)/);
+  assert.match(block, /clip-path:\s*circle\(50% at 50% 50%\)/);
 });
 
 test("render() keeps only time/spin uploads and the draw on the hot path", () => {

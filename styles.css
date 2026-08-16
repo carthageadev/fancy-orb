@@ -502,6 +502,8 @@ a {
   height: var(--orb-size);
   overflow: hidden;
   border-radius: 50%;
+  -webkit-clip-path: circle(50% at 50% 50%);
+  clip-path: circle(50% at 50% 50%);
   background: #020305;
   box-shadow:
     0 0 26px rgba(149, 172, 255, 0.07),
