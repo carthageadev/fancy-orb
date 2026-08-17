@@ -296,6 +296,7 @@ export class WebGPUOrbRenderer {
     this.displayScale = 1;
     this.fidelity = 1;
     this.lens = 0.4;
+    this.interactionSpin = 0;
     this.visible = true;
     this.lastWidth = 0;
     this.lastHeight = 0;
@@ -363,6 +364,10 @@ export class WebGPUOrbRenderer {
     this.lens = value;
   }
 
+  setInteractionSpin(value) {
+    this.interactionSpin = value;
+  }
+
   requestResize() {
     this.needsResize = true;
   }
@@ -408,7 +413,7 @@ export class WebGPUOrbRenderer {
       time: time,
       phase: this.phase,
       audio: this.audio,
-      spin: this.spin + time * 0.08,
+      spin: this.spin + time * 0.08 + (this.interactionSpin || 0),
       arch: -1,
       lens: this.lens,
       starDensity: this.starDensity,

@@ -73,7 +73,7 @@ test("render() keeps only time/spin uploads and the draw on the hot path", () =>
   const render = extractMethod(mainSource, "render");
   assert.ok(render, "render() body not found");
   assert.match(render, /gl\.uniform1f\(this\.locations\.time, time\)/);
-  assert.match(render, /gl\.uniform1f\(this\.locations\.spin, this\.spin \+ time \* 0\.08\)/);
+  assert.match(render, /gl\.uniform1f\(this\.locations\.spin, this\.spin \+ time \* 0\.08 \+ \(this\.interactionSpin \|\| 0\)\)/);
   assert.match(render, /gl\.drawArrays\(gl\.TRIANGLE_STRIP, 0, 4\)/);
   // static GL state is bound in initializeGpu(), never per frame
   assert.doesNotMatch(render, /useProgram/);

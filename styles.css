@@ -181,6 +181,14 @@ a {
   border-radius: 3px;
 }
 
+.render-setting-hint {
+  display: block;
+  margin: -4px 0 10px;
+  color: #6d6b71;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .render-mode-toggle {
   display: flex;
   align-items: center;

@@ -63,6 +63,18 @@ const startupStartedAt = performance.now();
 let rendererReadyAt = null;
 let firstRenderAt = null;
 
+// Interactive motion state — opt-in orb rotation driven by pointer position
+// or device orientation. Off by default; no per-frame overhead when disabled.
+let interactiveEnabled = false;
+let interactionPermission = "unknown"; // "unknown" | "granted" | "denied" | "unavailable"
+let interactionSource = "none"; // "none" | "pointer" | "orientation"
+let interactionTarget = 0;
+let interactionCurrent = 0;
+let gyroNeutralGamma = null;
+let gyroNeutralBeta = null;
+let interactiveCheckbox = null;
+let interactiveHint = null;
+
 // Lens toggle state. The `#lens-setting` select (values "on"/"off", default
 // "on") drives the in-shader chromatic lens (uLens 0.4). This is an explicit
 // visual-quality tradeoff for A/B comparisons; FPS caps reduce render
@@ -110,6 +122,10 @@ function hexToRgb(hex) { // legacy: superseded by orb-spec.js
 
 function mixRgb(first, second, amount) { // legacy: superseded by orb-spec.js
   return first.map((channel, index) => channel + (second[index] - channel) * amount);
+}
+
+function clamp(value, min, max) {
+  return value < min ? min : value > max ? max : value;
 }
 
 function stripShaderComments(source) {
@@ -228,6 +244,7 @@ class OrbRenderer {
     this.displayScale = 1;
     this.fidelity = fidelityValue;
     this.lens = LENS_ON_VALUE;
+    this.interactionSpin = 0;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
     if (!this.gl) {
@@ -346,6 +363,10 @@ class OrbRenderer {
     this.uploadStaticUniforms();
   }
 
+  setInteractionSpin(value) {
+    this.interactionSpin = value;
+  }
+
   setOrb(data, index) {
     this.data = data;
     this.index = index;
@@ -410,7 +431,7 @@ class OrbRenderer {
     // static GL state or an unchanged uniform re-uploaded by the setters and
     // initializeGpu().
     gl.uniform1f(this.locations.time, time);
-    gl.uniform1f(this.locations.spin, this.spin + time * 0.08);
+    gl.uniform1f(this.locations.spin, this.spin + time * 0.08 + (this.interactionSpin || 0));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
   }
@@ -524,6 +545,126 @@ function applyDebugSetting(enabled) {
   }
 }
 
+// --- opt-in interactive motion ---
+// When enabled, pointer position over .orb-stage or device orientation
+// influences the orb's rotation via a per-renderer interactionSpin offset
+// added to the existing uSpin uniform. Listeners are registered only while
+// the mode is active, so there is zero per-frame overhead when disabled.
+
+function onInteractivePointerMove(event) {
+  if (!interactiveEnabled || !orbStage) return;
+  const rect = orbStage.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const normX = (event.clientX - rect.left) / rect.width;
+  const normY = (event.clientY - rect.top) / rect.height;
+  // Primary X maps to [-0.6, 0.6]; small Y contribution adds up to ±0.06
+  const targetX = (normX - 0.5) * 1.2;
+  const targetY = (normY - 0.5) * 0.12;
+  interactionTarget = clamp(targetX + targetY, -0.6, 0.6);
+  if (interactionSource !== "orientation") interactionSource = "pointer";
+}
+
+function onInteractivePointerLeave() {
+  interactionTarget = 0;
+}
+
+// Device orientation handler. Gamma (left-right tilt, [-90, 90]) is the
+// primary axis; beta (front-back tilt) adds a small secondary contribution.
+// The neutral baseline is captured on the first event after enable so the
+// orb follows relative movement rather than absolute device angle. Screen
+// orientation is not handled separately: browsers already report gamma/beta
+// relative to the current natural orientation, so the mapping is correct
+// regardless of portrait/landscape.
+function onDeviceOrientation(event) {
+  if (!interactiveEnabled) return;
+  const { gamma, beta } = event;
+  if (gamma === null || beta === null) return;
+  if (typeof gamma !== "number" || typeof beta !== "number"
+      || !Number.isFinite(gamma) || !Number.isFinite(beta)) return;
+  if (gyroNeutralGamma === null) {
+    gyroNeutralGamma = gamma;
+    gyroNeutralBeta = beta;
+  }
+  const gammaDelta = gamma - gyroNeutralGamma;
+  const betaDelta = beta - gyroNeutralBeta;
+  // ~30° gamma ≈ 0.52 rad → factor 0.02 maps to ~0.6; beta contributes less
+  interactionTarget = clamp(gammaDelta * 0.02 + betaDelta * 0.01, -0.6, 0.6);
+  interactionSource = "orientation";
+}
+
+async function requestOrientationPermission() {
+  if (window.isSecureContext === false) {
+    interactionPermission = "unavailable";
+    interactionSource = "pointer";
+    return;
+  }
+  if (typeof DeviceOrientationEvent !== "undefined"
+      && typeof DeviceOrientationEvent.requestPermission === "function") {
+    try {
+      const result = await DeviceOrientationEvent.requestPermission();
+      interactionPermission = result === "granted" ? "granted" : "denied";
+    } catch {
+      interactionPermission = "denied";
+    }
+    if (interactionPermission !== "granted") interactionSource = "pointer";
+  } else if (typeof DeviceOrientationEvent !== "undefined") {
+    interactionPermission = "granted";
+  } else {
+    interactionPermission = "unavailable";
+    interactionSource = "pointer";
+  }
+}
+
+function addInteractiveListeners() {
+  if (orbStage) {
+    orbStage.addEventListener("pointermove", onInteractivePointerMove, { passive: true });
+    orbStage.addEventListener("pointerleave", onInteractivePointerLeave, { passive: true });
+  }
+  if (interactionPermission === "granted") {
+    window.addEventListener("deviceorientation", onDeviceOrientation, { passive: true });
+  }
+}
+
+function removeInteractiveListeners() {
+  if (orbStage) {
+    orbStage.removeEventListener("pointermove", onInteractivePointerMove);
+    orbStage.removeEventListener("pointerleave", onInteractivePointerLeave);
+  }
+  window.removeEventListener("deviceorientation", onDeviceOrientation);
+}
+
+function updateInteractiveHint() {
+  if (!interactiveHint) return;
+  if (!interactiveEnabled) {
+    interactiveHint.textContent = "Pointer or phone tilt guides the orb.";
+  } else if (interactionPermission === "denied") {
+    interactiveHint.textContent = "Sensor permission denied — pointer controls only.";
+  } else if (interactionPermission === "unavailable") {
+    interactiveHint.textContent = "Gyroscope unavailable — pointer controls only.";
+  } else {
+    interactiveHint.textContent = "Pointer or phone tilt guides the orb.";
+  }
+}
+
+async function setInteractiveMotion(enabled) {
+  if (enabled === interactiveEnabled) return;
+  interactiveEnabled = enabled;
+
+  if (enabled) {
+    await requestOrientationPermission();
+    if (!interactiveEnabled) return;
+    addInteractiveListeners();
+  } else {
+    removeInteractiveListeners();
+    interactionTarget = 0;
+    interactionSource = "none";
+    gyroNeutralGamma = null;
+    gyroNeutralBeta = null;
+  }
+
+  updateInteractiveHint();
+}
+
 function setRenderSettingsOpen(isOpen) {
   if (!brandSettingsToggle || !renderSettings) return;
   renderSettings.hidden = !isOpen;
@@ -561,6 +702,12 @@ function setupRenderSettings() {
   // Default off; only `?debug=1` opts in at load. The checkbox's checked state
   // is synced to the resolved setting so the control never lies.
   applyDebugSetting(debugOptIn);
+
+  interactiveCheckbox = document.querySelector("#interactive-motion");
+  interactiveHint = interactiveCheckbox?.parentElement?.nextElementSibling;
+  interactiveCheckbox?.addEventListener("change", async (event) => {
+    await setInteractiveMotion(event.target.checked);
+  });
 
   document.querySelector("#renderModeToggle")?.addEventListener("click", toggleRendererMode);
   updateRendererModeControl();
@@ -844,6 +991,7 @@ async function initializeWebGPU(token) {
           renderer.setQualityScale(quality.scale);
           renderer.setFidelity(fidelityValue);
           renderer.setLens(getLensValue());
+          renderer.setInteractionSpin(interactionCurrent);
           rendererPool.push(renderer);
         }
         if (engine.failed) engineReady = false;
@@ -903,6 +1051,7 @@ function initializeRendererPool(token, index = 0) {
     try {
       const renderer = new OrbRenderer(canvas, orbData[index], index);
       renderer.setLens(getLensValue());
+      renderer.setInteractionSpin(interactionCurrent);
       rendererPool.push(renderer);
     } catch (error) {
       rendererInitializationFailed = true;
@@ -1066,6 +1215,15 @@ function frame(now) {
   if (!paused) {
     lastTime = typeof window.__orbFreezeTime === "number" ? window.__orbFreezeTime : now * 0.001;
   }
+  // Smooth interactive motion offset toward the target (zero overhead when off and settled)
+  if (interactiveEnabled || interactionCurrent !== 0) {
+    const target = interactiveEnabled ? interactionTarget : 0;
+    interactionCurrent += (target - interactionCurrent) * 0.08;
+    if (Math.abs(interactionCurrent) < 0.0001) interactionCurrent = 0;
+    for (let index = 0; index < rendererPool.length; index += 1) {
+      rendererPool[index].setInteractionSpin(interactionCurrent);
+    }
+  }
   const frameMs = lastFrameNow ? now - lastFrameNow : AUTO_BUDGET_MS;
   lastFrameNow = now;
   // The cadence gate skips rendering work on in-between rAFs while time still
@@ -1141,6 +1299,13 @@ window.__orbDebug = () => ({
   fps: {
     setting: fpsSetting,
     intervalMs: +fpsIntervalMs.toFixed(2)
+  },
+  interaction: {
+    enabled: interactiveEnabled,
+    source: interactionSource,
+    target: +interactionTarget.toFixed(4),
+    current: +interactionCurrent.toFixed(4),
+    permission: interactionPermission
   }
 });
 

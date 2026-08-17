@@ -109,6 +109,35 @@ the lens is an explicit, user-visible visual-quality tradeoff intended for A/B
 performance comparisons — losing the chromatic edge is expected, and the
 setting never interacts with FPS caps, which gate render frequency only.
 
+## Interactive motion
+
+The **Interactive motion** toggle (`#interactive-motion`, default off) opts into
+pointer- and gyroscope-driven orb rotation. When unchecked, the default
+animation and visuals are unchanged; when checked:
+
+- **Desktop**: pointer movement over `.orb-stage` influences the orb's spin.
+  Horizontal position is the primary axis (±0.6 radians); vertical position
+  adds a small contribution (±0.06 radians).
+- **Mobile**: device orientation (gamma/beta) influences the orb's spin.
+  A neutral baseline is captured on enable, and subsequent tilt deltas map
+  into a bounded offset (roughly ±0.6 radians). Screen orientation is not
+  handled separately — browsers already report gamma/beta relative to the
+  current natural orientation.
+- **iOS Safari**: `DeviceOrientationEvent.requestPermission()` is requested
+  from the checkbox user gesture. If permission is denied or the API is
+  unavailable, the toggle remains checked but the hint updates to indicate
+  pointer-only controls.
+- **Firefox/Chrome Android**: no permission request is needed; gyroscope
+  access is immediate.
+
+The interaction offset is smoothly interpolated per frame and added to the
+existing `uSpin` uniform. No new uniforms, shader changes, or WGSL layout
+changes are required. Listeners are registered only while the mode is active,
+and the offset decays cleanly to zero when disabled.
+
+`window.__orbDebug().interaction` exposes the current enabled state, input
+source, target/current offsets, and permission status.
+
 ## Debug / performance overlay
 
 Append `?debug=1` to the URL, or check **Debug** (`#debug-setting`) in the
