@@ -70,6 +70,10 @@ let interactionPermission = "unknown"; // "unknown" | "granted" | "denied" | "un
 let interactionSource = "none"; // "none" | "pointer" | "orientation"
 let interactionTarget = 0;
 let interactionCurrent = 0;
+let interactionTargetTiltX = 0;
+let interactionTargetTiltY = 0;
+let interactionCurrentTiltX = 0;
+let interactionCurrentTiltY = 0;
 let gyroNeutralGamma = null;
 let gyroNeutralBeta = null;
 let interactiveCheckbox = null;
@@ -565,11 +569,15 @@ function onInteractivePointerMove(event) {
   const targetX = (normX - 0.5) * 1.2;
   const targetY = (normY - 0.5) * 0.12;
   interactionTarget = clamp(targetX + targetY, -0.6, 0.6);
+  interactionTargetTiltX = clamp((0.5 - normY) * 10, -8, 8);
+  interactionTargetTiltY = clamp((normX - 0.5) * 10, -8, 8);
   if (interactionSource !== "orientation") interactionSource = "pointer";
 }
 
 function onInteractivePointerLeave() {
   interactionTarget = 0;
+  interactionTargetTiltX = 0;
+  interactionTargetTiltY = 0;
 }
 
 // Device orientation handler. Gamma (left-right tilt, [-90, 90]) is the
@@ -593,6 +601,8 @@ function onDeviceOrientation(event) {
   const betaDelta = beta - gyroNeutralBeta;
   // ~30° gamma ≈ 0.52 rad → factor 0.02 maps to ~0.6; beta contributes less
   interactionTarget = clamp(gammaDelta * 0.02 + betaDelta * 0.01, -0.6, 0.6);
+  interactionTargetTiltX = clamp(-betaDelta * 0.18, -8, 8);
+  interactionTargetTiltY = clamp(gammaDelta * 0.18, -8, 8);
   interactionSource = "orientation";
 }
 
@@ -664,6 +674,8 @@ async function setInteractiveMotion(enabled) {
   } else {
     removeInteractiveListeners();
     interactionTarget = 0;
+    interactionTargetTiltX = 0;
+    interactionTargetTiltY = 0;
     interactionSource = "none";
     gyroNeutralGamma = null;
     gyroNeutralBeta = null;
@@ -1233,10 +1245,21 @@ function frame(now) {
     }
   }
   // Smooth interactive motion offset toward the target (zero overhead when off and settled)
-  if (interactiveEnabled || interactionCurrent !== 0) {
+  if (interactiveEnabled
+      || interactionCurrent !== 0
+      || interactionCurrentTiltX !== 0
+      || interactionCurrentTiltY !== 0) {
     const target = interactiveEnabled ? interactionTarget : 0;
     interactionCurrent += (target - interactionCurrent) * 0.08;
+    const targetTiltX = interactiveEnabled ? interactionTargetTiltX : 0;
+    const targetTiltY = interactiveEnabled ? interactionTargetTiltY : 0;
+    interactionCurrentTiltX += (targetTiltX - interactionCurrentTiltX) * 0.08;
+    interactionCurrentTiltY += (targetTiltY - interactionCurrentTiltY) * 0.08;
     if (Math.abs(interactionCurrent) < 0.0001) interactionCurrent = 0;
+    if (Math.abs(interactionCurrentTiltX) < 0.001) interactionCurrentTiltX = 0;
+    if (Math.abs(interactionCurrentTiltY) < 0.001) interactionCurrentTiltY = 0;
+    orbStage?.style.setProperty("--orb-tilt-x", `${interactionCurrentTiltX.toFixed(2)}deg`);
+    orbStage?.style.setProperty("--orb-tilt-y", `${interactionCurrentTiltY.toFixed(2)}deg`);
     for (let index = 0; index < rendererPool.length; index += 1) {
       rendererPool[index].setInteractionSpin(interactionCurrent);
     }
@@ -1322,6 +1345,10 @@ window.__orbDebug = () => ({
     source: interactionSource,
     target: +interactionTarget.toFixed(4),
     current: +interactionCurrent.toFixed(4),
+    targetTiltX: +interactionTargetTiltX.toFixed(2),
+    targetTiltY: +interactionTargetTiltY.toFixed(2),
+    currentTiltX: +interactionCurrentTiltX.toFixed(2),
+    currentTiltY: +interactionCurrentTiltY.toFixed(2),
     permission: interactionPermission
   }
 });

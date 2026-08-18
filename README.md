@@ -135,6 +135,11 @@ existing `uSpin` uniform. No new uniforms, shader changes, or WGSL layout
 changes are required. Listeners are registered only while the mode is active,
 and the offset decays cleanly to zero when disabled.
 
+Pointer and tilt also drive a restrained two-axis 3D transform on the orb
+visual, so interactive mode follows vertical movement as well as left/right
+rotation. The transform defaults to zero and is applied only while the mode is
+active or its values are easing back to rest.
+
 `window.__orbDebug().interaction` exposes the current enabled state, input
 source, target/current offsets, and permission status.
 

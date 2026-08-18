@@ -565,6 +565,9 @@ a {
   display: block;
   width: var(--orb-size);
   height: var(--orb-size);
+  transform: perspective(900px) rotateX(var(--orb-tilt-x, 0deg)) rotateY(var(--orb-tilt-y, 0deg));
+  transform-origin: 50% 50%;
+  transition: transform 140ms ease-out;
   overflow: hidden;
   border-radius: 50%;
   -webkit-clip-path: circle(50% at 50% 50%);

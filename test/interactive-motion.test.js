@@ -50,6 +50,8 @@ function extractMethod(source, name, indent = 0) {
 test("interactive motion is off by default", () => {
   assert.match(mainSource, /let interactiveEnabled = false/);
   assert.match(mainSource, /let interactionCurrent = 0/);
+  assert.match(mainSource, /let interactionCurrentTiltX = 0/);
+  assert.match(mainSource, /let interactionCurrentTiltY = 0/);
   assert.match(mainSource, /let interactionPermission = "unknown"/);
   assert.match(mainSource, /let interactionSource = "none"/);
 });
@@ -260,6 +262,8 @@ test("pointer handler maps x to [-0.6, 0.6] range and clamps", () => {
   assert.match(body, /\(normX - 0\.5\) \* 1\.2/, "x mapping to [-0.6, 0.6]");
   assert.match(body, /\(normY - 0\.5\) \* 0\.12/, "small y contribution");
   assert.match(body, /clamp\(targetX \+ targetY, -0\.6, 0\.6\)/, "clamped to [-0.6, 0.6]");
+  assert.match(body, /interactionTargetTiltX = clamp\(\(0\.5 - normY\) \* 10, -8, 8\)/);
+  assert.match(body, /interactionTargetTiltY = clamp\(\(normX - 0\.5\) \* 10, -8, 8\)/);
 });
 
 test("orientation handler maps gamma/beta deltas into bounded offset", () => {
@@ -268,6 +272,8 @@ test("orientation handler maps gamma/beta deltas into bounded offset", () => {
   assert.match(body, /gammaDelta \* 0\.02/, "gamma factor ~30° → 0.6 rad");
   assert.match(body, /betaDelta \* 0\.01/, "smaller beta contribution");
   assert.match(body, /clamp\(gammaDelta \* 0\.02 \+ betaDelta \* 0\.01, -0\.6, 0\.6\)/);
+  assert.match(body, /interactionTargetTiltX = clamp\(-betaDelta \* 0\.18, -8, 8\)/);
+  assert.match(body, /interactionTargetTiltY = clamp\(gammaDelta \* 0\.18, -8, 8\)/);
 });
 
 test("orientation handler captures neutral baseline on first event", () => {
@@ -297,13 +303,19 @@ test("frame loop applies smoothing with factor 0.08 and decay threshold", () => 
   assert.match(frame, /interactionCurrent \+= \(target - interactionCurrent\) \* 0\.08/);
   assert.match(frame, /Math\.abs\(interactionCurrent\) < 0\.0001/);
   assert.match(frame, /interactionCurrent = 0/);
+  assert.match(frame, /interactionCurrentTiltX \+= \(targetTiltX - interactionCurrentTiltX\) \* 0\.08/);
+  assert.match(frame, /interactionCurrentTiltY \+= \(targetTiltY - interactionCurrentTiltY\) \* 0\.08/);
+  assert.match(frame, /--orb-tilt-x/);
+  assert.match(frame, /--orb-tilt-y/);
 });
 
 test("frame loop decays interactionCurrent to zero after disable", () => {
   const frame = extractMethod(mainSource, "frame", 0);
   assert.ok(frame, "frame() body not found");
   // The decay guard: continue smoothing when current is non-zero even if disabled
-  assert.match(frame, /interactiveEnabled \|\| interactionCurrent !== 0/);
+  assert.match(frame, /interactiveEnabled[\s\S]*interactionCurrent !== 0[\s\S]*interactionCurrentTiltX !== 0/);
+  assert.match(frame, /interactionCurrentTiltX !== 0/);
+  assert.match(frame, /interactionCurrentTiltY !== 0/);
 });
 
 // --- both renderer spin paths ---
@@ -354,5 +366,9 @@ test("window.__orbDebug exposes interaction state", () => {
   assert.match(mainSource, /source: interactionSource/);
   assert.match(mainSource, /target: \+interactionTarget\.toFixed\(4\)/);
   assert.match(mainSource, /current: \+interactionCurrent\.toFixed\(4\)/);
+  assert.match(mainSource, /targetTiltX: \+interactionTargetTiltX\.toFixed\(2\)/);
+  assert.match(mainSource, /targetTiltY: \+interactionTargetTiltY\.toFixed\(2\)/);
+  assert.match(mainSource, /currentTiltX: \+interactionCurrentTiltX\.toFixed\(2\)/);
+  assert.match(mainSource, /currentTiltY: \+interactionCurrentTiltY\.toFixed\(2\)/);
   assert.match(mainSource, /permission: interactionPermission/);
 });
