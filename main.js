@@ -74,6 +74,10 @@ let gyroNeutralGamma = null;
 let gyroNeutralBeta = null;
 let interactiveCheckbox = null;
 let interactiveHint = null;
+// Freeze state: when interactive mode is on, autonomous time progression is
+// paused and only pointer/gyro input drives rotation via interactionCurrent.
+let interactionFrozenTime = 0;
+let interactionFrozenAt = 0;
 
 // Lens toggle state. The `#lens-setting` select (values "on"/"off", default
 // "on") drives the in-shader chromatic lens (uLens 0.4). This is an explicit
@@ -651,6 +655,9 @@ async function setInteractiveMotion(enabled) {
   interactiveEnabled = enabled;
 
   if (enabled) {
+    // Freeze autonomous time so only pointer/gyro input drives rotation.
+    interactionFrozenTime = lastTime;
+    interactionFrozenAt = performance.now();
     await requestOrientationPermission();
     if (!interactiveEnabled) return;
     addInteractiveListeners();
@@ -660,6 +667,7 @@ async function setInteractiveMotion(enabled) {
     interactionSource = "none";
     gyroNeutralGamma = null;
     gyroNeutralBeta = null;
+    // interactionFrozenAt is left > 0 so frame() resumes time on the next tick
   }
 
   updateInteractiveHint();
@@ -1213,7 +1221,16 @@ let lastTime = 0;
 let lastFrameNow = 0;
 function frame(now) {
   if (!paused) {
-    lastTime = typeof window.__orbFreezeTime === "number" ? window.__orbFreezeTime : now * 0.001;
+    if (interactiveEnabled) {
+      // Time frozen: keep lastTime at the value captured when interactive was enabled.
+      // Only interactionCurrent (pointer/gyro) drives rotation via the renderers.
+    } else if (interactionFrozenAt > 0) {
+      // Resume autonomous time, compensating for wall-clock time spent frozen.
+      lastTime = interactionFrozenTime + (performance.now() - interactionFrozenAt) / 1000;
+      interactionFrozenAt = 0;
+    } else {
+      lastTime = typeof window.__orbFreezeTime === "number" ? window.__orbFreezeTime : now * 0.001;
+    }
   }
   // Smooth interactive motion offset toward the target (zero overhead when off and settled)
   if (interactiveEnabled || interactionCurrent !== 0) {

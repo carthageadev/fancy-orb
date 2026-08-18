@@ -54,6 +54,70 @@ test("interactive motion is off by default", () => {
   assert.match(mainSource, /let interactionSource = "none"/);
 });
 
+// --- time freeze / resume ---
+
+test("freeze state variables default to zero", () => {
+  assert.match(mainSource, /let interactionFrozenTime = 0/);
+  assert.match(mainSource, /let interactionFrozenAt = 0/);
+});
+
+test("setInteractiveMotion captures freeze point on enable", () => {
+  const body = extractMethod(mainSource, "setInteractiveMotion", 0);
+  assert.ok(body, "setInteractiveMotion() body not found");
+  assert.match(body, /interactionFrozenTime = lastTime/, "must capture lastTime as frozen point");
+  assert.match(body, /interactionFrozenAt = performance\.now\(\)/, "must record wall-clock of freeze");
+  // Freeze must happen before the async permission request
+  const freezeCapture = body.indexOf("interactionFrozenTime = lastTime");
+  const permissionRequest = body.indexOf("await requestOrientationPermission()");
+  assert.ok(freezeCapture > -1, "freeze capture not found");
+  assert.ok(permissionRequest > -1, "permission request not found");
+  assert.ok(freezeCapture < permissionRequest, "freeze must be captured before the async permission request");
+});
+
+test("setInteractiveMotion leaves frozenAt > 0 on disable for frame() to resume", () => {
+  const body = extractMethod(mainSource, "setInteractiveMotion", 0);
+  assert.ok(body, "setInteractiveMotion() body not found");
+  // The disable branch must NOT reset interactionFrozenAt — frame() picks it up
+  const elseBlock = body.indexOf("} else {");
+  const disableBlockEnd = body.indexOf("updateInteractiveHint");
+  const disableBody = body.slice(elseBlock, disableBlockEnd);
+  assert.ok(disableBody.indexOf("interactionFrozenAt = 0") === -1,
+    "disable branch must not reset interactionFrozenAt — leave it for frame()");
+});
+
+test("frame() freezes time when interactive mode is enabled", () => {
+  const frame = extractMethod(mainSource, "frame", 0);
+  assert.ok(frame, "frame() body not found");
+  // The interactive-enabled branch must exist as a no-op (freezes lastTime)
+  assert.match(frame, /if \(interactiveEnabled\)/, "interactive branch in time gate");
+  // Must NOT update lastTime inside the interactiveEnabled branch
+  const interactiveBranch = frame.indexOf("if (interactiveEnabled)");
+  const resumeBranch = frame.indexOf("interactionFrozenAt > 0");
+  const interactiveBlock = frame.slice(interactiveBranch, resumeBranch);
+  assert.ok(interactiveBlock.indexOf("lastTime =") === -1,
+    "interactiveEnabled branch must not assign lastTime (time is frozen)");
+});
+
+test("frame() resumes time after freeze on the first non-interactive frame", () => {
+  const frame = extractMethod(mainSource, "frame", 0);
+  assert.ok(frame, "frame() body not found");
+  assert.match(frame, /interactionFrozenAt > 0/, "resume guard");
+  assert.match(frame, /interactionFrozenTime \+ \(performance\.now\(\) - interactionFrozenAt\) \/ 1000/,
+    "resume must add frozen time + elapsed wall-clock since freeze");
+  assert.match(frame, /interactionFrozenAt = 0/, "must clear frozenAt after resuming");
+  // Resume must precede the normal time update
+  const resumeGuard = frame.indexOf("interactionFrozenAt > 0");
+  const normalUpdate = frame.indexOf('window.__orbFreezeTime');
+  assert.ok(resumeGuard < normalUpdate, "resume branch must precede normal time update");
+});
+
+test("frame() normal time update runs only when not frozen and not resuming", () => {
+  const frame = extractMethod(mainSource, "frame", 0);
+  assert.ok(frame, "frame() body not found");
+  // The normal branch should be the else: of the frozenAt check
+  assert.match(frame, /lastTime = typeof window\.__orbFreezeTime === "number" \? window\.__orbFreezeTime : now \* 0\.001/);
+});
+
 test("default WebGL spin formula includes interactionSpin with a zero fallback", () => {
   assert.match(mainSource, /this\.spin \+ time \* 0\.08 \+ \(this\.interactionSpin \|\| 0\)/);
 });
