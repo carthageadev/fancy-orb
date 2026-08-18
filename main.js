@@ -78,10 +78,6 @@ let gyroNeutralGamma = null;
 let gyroNeutralBeta = null;
 let interactiveCheckbox = null;
 let interactiveHint = null;
-// Freeze state: when interactive mode is on, autonomous time progression is
-// paused and only pointer/gyro input drives rotation via interactionCurrent.
-let interactionFrozenTime = 0;
-let interactionFrozenAt = 0;
 
 // Lens toggle state. The `#lens-setting` select (values "on"/"off", default
 // "on") drives the in-shader chromatic lens (uLens 0.4). This is an explicit
@@ -253,6 +249,7 @@ class OrbRenderer {
     this.fidelity = fidelityValue;
     this.lens = LENS_ON_VALUE;
     this.interactionSpin = 0;
+    this.autonomousSpin = true;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
     if (!this.gl) {
@@ -375,6 +372,10 @@ class OrbRenderer {
     this.interactionSpin = value;
   }
 
+  setAutonomousSpin(enabled) {
+    this.autonomousSpin = Boolean(enabled);
+  }
+
   setOrb(data, index) {
     this.data = data;
     this.index = index;
@@ -439,7 +440,7 @@ class OrbRenderer {
     // static GL state or an unchanged uniform re-uploaded by the setters and
     // initializeGpu().
     gl.uniform1f(this.locations.time, time);
-    gl.uniform1f(this.locations.spin, this.spin + time * 0.08 + (this.interactionSpin || 0));
+    gl.uniform1f(this.locations.spin, this.spin + (this.autonomousSpin ? time * 0.08 : 0) + (this.interactionSpin || 0));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
   }
@@ -665,13 +666,13 @@ async function setInteractiveMotion(enabled) {
   interactiveEnabled = enabled;
 
   if (enabled) {
-    // Freeze autonomous time so only pointer/gyro input drives rotation.
-    interactionFrozenTime = lastTime;
-    interactionFrozenAt = performance.now();
+    // Keep shader time alive for effects while replacing only autonomous spin.
+    rendererPool.forEach((renderer) => renderer.setAutonomousSpin(false));
     await requestOrientationPermission();
     if (!interactiveEnabled) return;
     addInteractiveListeners();
   } else {
+    rendererPool.forEach((renderer) => renderer.setAutonomousSpin(true));
     removeInteractiveListeners();
     interactionTarget = 0;
     interactionTargetTiltX = 0;
@@ -679,7 +680,6 @@ async function setInteractiveMotion(enabled) {
     interactionSource = "none";
     gyroNeutralGamma = null;
     gyroNeutralBeta = null;
-    // interactionFrozenAt is left > 0 so frame() resumes time on the next tick
   }
 
   updateInteractiveHint();
@@ -1233,16 +1233,9 @@ let lastTime = 0;
 let lastFrameNow = 0;
 function frame(now) {
   if (!paused) {
-    if (interactiveEnabled) {
-      // Time frozen: keep lastTime at the value captured when interactive was enabled.
-      // Only interactionCurrent (pointer/gyro) drives rotation via the renderers.
-    } else if (interactionFrozenAt > 0) {
-      // Resume autonomous time, compensating for wall-clock time spent frozen.
-      lastTime = interactionFrozenTime + (performance.now() - interactionFrozenAt) / 1000;
-      interactionFrozenAt = 0;
-    } else {
-      lastTime = typeof window.__orbFreezeTime === "number" ? window.__orbFreezeTime : now * 0.001;
-    }
+    // Keep uTime moving so shader effects continue while interactive mode
+    // replaces only the autonomous sphere rotation.
+    lastTime = typeof window.__orbFreezeTime === "number" ? window.__orbFreezeTime : now * 0.001;
   }
   // Smooth interactive motion offset toward the target (zero overhead when off and settled)
   if (interactiveEnabled
@@ -1262,6 +1255,7 @@ function frame(now) {
     orbStage?.style.setProperty("--orb-tilt-y", `${interactionCurrentTiltY.toFixed(2)}deg`);
     for (let index = 0; index < rendererPool.length; index += 1) {
       rendererPool[index].setInteractionSpin(interactionCurrent);
+      rendererPool[index].setAutonomousSpin(!interactiveEnabled);
     }
   }
   const frameMs = lastFrameNow ? now - lastFrameNow : AUTO_BUDGET_MS;

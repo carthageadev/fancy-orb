@@ -131,9 +131,11 @@ animation and visuals are unchanged; when checked:
   access is immediate.
 
 The interaction offset is smoothly interpolated per frame and added to the
-existing `uSpin` uniform. No new uniforms, shader changes, or WGSL layout
-changes are required. Listeners are registered only while the mode is active,
-and the offset decays cleanly to zero when disabled.
+existing `uSpin` uniform. Interactive mode disables only the autonomous sphere
+spin; the shared shader clock keeps running, so shooting stars, shimmer, and
+aurora motion continue. No new uniforms, shader changes, or WGSL layout changes
+are required. Listeners are registered only while the mode is active, and the
+offset decays cleanly to zero when disabled.
 
 Pointer and tilt also drive a restrained two-axis 3D transform on the orb
 visual, so interactive mode follows vertical movement as well as left/right
