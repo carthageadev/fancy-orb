@@ -572,22 +572,15 @@ function applyDebugSetting(enabled) {
 // the mode is active, so there is zero per-frame overhead when disabled.
 
 function onInteractivePointerMove(event) {
-  if (!interactiveEnabled || !orbStage) return;
-  const rect = orbStage.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return;
-  const normX = (event.clientX - rect.left) / rect.width;
-  const normY = (event.clientY - rect.top) / rect.height;
+  if (!interactiveEnabled || window.innerWidth === 0 || window.innerHeight === 0) return;
+  const normX = event.clientX / window.innerWidth;
+  const normY = event.clientY / window.innerHeight;
   // Screen axes stay independent: horizontal yaw and vertical pitch.
   interactionTarget = clamp((normX - 0.5) * 1.2, -0.6, 0.6);
   // Sphere sampling is inverse-mapped, so the pointer Y sign is reversed to
   // make the visible surface travel with the cursor rather than against it.
   interactionTargetPitch = clamp((normY - 0.5) * 1.0, -0.5, 0.5);
   if (interactionSource !== "orientation") interactionSource = "pointer";
-}
-
-function onInteractivePointerLeave() {
-  interactionTarget = 0;
-  interactionTargetPitch = 0;
 }
 
 // Device orientation handler. Map the physical device axes into screen
@@ -650,20 +643,14 @@ async function requestOrientationPermission() {
 }
 
 function addInteractiveListeners() {
-  if (orbStage) {
-    orbStage.addEventListener("pointermove", onInteractivePointerMove, { passive: true });
-    orbStage.addEventListener("pointerleave", onInteractivePointerLeave, { passive: true });
-  }
+  window.addEventListener("pointermove", onInteractivePointerMove, { passive: true });
   if (interactionPermission === "granted") {
     window.addEventListener("deviceorientation", onDeviceOrientation, { passive: true });
   }
 }
 
 function removeInteractiveListeners() {
-  if (orbStage) {
-    orbStage.removeEventListener("pointermove", onInteractivePointerMove);
-    orbStage.removeEventListener("pointerleave", onInteractivePointerLeave);
-  }
+  window.removeEventListener("pointermove", onInteractivePointerMove);
   window.removeEventListener("deviceorientation", onDeviceOrientation);
 }
 

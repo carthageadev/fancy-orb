@@ -115,9 +115,9 @@ The **Interactive motion** toggle (`#interactive-motion`, default off) opts into
 pointer- and gyroscope-driven orb rotation. When unchecked, the default
 animation and visuals are unchanged; when checked:
 
-- **Desktop**: pointer movement over `.orb-stage` influences the orb's spin.
-  Horizontal position is the primary axis (±0.6 radians); vertical position
-  adds a small contribution (±0.06 radians).
+- **Desktop**: pointer movement anywhere in the viewport guides the orb.
+  Horizontal position controls yaw (±0.6 radians) and vertical position
+  controls pitch (±0.5 radians), even while hovering controls or text.
 - **Mobile**: device orientation maps gamma/beta into independent screen axes.
   Left/right tilt controls horizontal spin, while forward/back tilt controls a
   visible up/down pitch. A neutral baseline is captured on enable, and the

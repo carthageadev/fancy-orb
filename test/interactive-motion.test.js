@@ -115,26 +115,27 @@ test("setInteractiveMotion registers listeners on enable and removes on disable"
   assert.match(body, /removeInteractiveListeners\(\)/, "disable path must remove listeners");
 });
 
-test("addInteractiveListeners uses passive pointer listeners on orbStage", () => {
+test("addInteractiveListeners uses a passive viewport pointer listener", () => {
   const body = extractMethod(mainSource, "addInteractiveListeners", 0);
   assert.ok(body, "addInteractiveListeners() body not found");
-  assert.match(body, /orbStage\.addEventListener\("pointermove", onInteractivePointerMove, \{ passive: true \}\)/);
-  assert.match(body, /orbStage\.addEventListener\("pointerleave", onInteractivePointerLeave, \{ passive: true \}\)/);
+  assert.match(body, /window\.addEventListener\("pointermove", onInteractivePointerMove, \{ passive: true \}\)/);
+  assert.doesNotMatch(body, /pointerleave/);
   assert.match(body, /window\.addEventListener\("deviceorientation", onDeviceOrientation, \{ passive: true \}\)/);
 });
 
-test("removeInteractiveListeners removes all three listeners", () => {
+test("removeInteractiveListeners removes viewport and orientation listeners", () => {
   const body = extractMethod(mainSource, "removeInteractiveListeners", 0);
   assert.ok(body, "removeInteractiveListeners() body not found");
-  assert.match(body, /orbStage\.removeEventListener\("pointermove", onInteractivePointerMove\)/);
-  assert.match(body, /orbStage\.removeEventListener\("pointerleave", onInteractivePointerLeave\)/);
+  assert.match(body, /window\.removeEventListener\("pointermove", onInteractivePointerMove\)/);
   assert.match(body, /window\.removeEventListener\("deviceorientation", onDeviceOrientation\)/);
 });
 
-test("pointerleave resets the interaction target to zero", () => {
-  const body = extractMethod(mainSource, "onInteractivePointerLeave", 0);
-  assert.ok(body, "onInteractivePointerLeave() body not found");
-  assert.match(body, /interactionTarget = 0/);
+test("pointer handler normalizes against the viewport", () => {
+  const body = extractMethod(mainSource, "onInteractivePointerMove", 0);
+  assert.ok(body, "onInteractivePointerMove() body not found");
+  assert.match(body, /event\.clientX \/ window\.innerWidth/);
+  assert.match(body, /event\.clientY \/ window\.innerHeight/);
+  assert.doesNotMatch(body, /getBoundingClientRect/);
 });
 
 test("setupRenderSettings wires #interactive-motion checkbox change", () => {
