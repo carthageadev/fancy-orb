@@ -69,6 +69,7 @@ struct U {
   fidelity: f32,
   pitch: f32,
   motion: f32,
+  roll: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -242,7 +243,7 @@ fn starfield(n: vec3f, t: f32) -> vec4f {
 // the hand, so the pattern travels over the poles too, not just sideways.
 fn sphereAt(n0: vec3f, spin: f32, t: f32) -> vec4f {
   var n = n0;
-  let roll = t * 0.13 * u.motion; // roll around the view axis
+  let roll = t * 0.13 * u.motion + u.roll; // roll around the view axis
   let cr = cos(roll);
   let sr = sin(roll);
   n = vec3f(cr * n.x - sr * n.y, sr * n.x + cr * n.y, n.z);

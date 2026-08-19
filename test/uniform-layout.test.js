@@ -23,7 +23,8 @@ const EXPECTED_FIELDS = [
   "starDensity",
   "fidelity",
   "pitch",
-  "motion"
+  "motion",
+  "roll"
 ];
 
 test("uniform offsets cover exactly the WGSL struct fields", () => {
@@ -48,9 +49,9 @@ test("vec3 fields align to 16 bytes (std140)", () => {
 });
 
 test("scalar fields are 4-byte aligned and sequential", () => {
-  const scalars = ["time", "phase", "audio", "spin", "arch", "lens", "starDensity", "fidelity", "pitch", "motion"];
+  const scalars = ["time", "phase", "audio", "spin", "arch", "lens", "starDensity", "fidelity", "pitch", "motion", "roll"];
   const offsets = scalars.map((field) => UNIFORM_OFFSETS[field]);
-  assert.deepEqual(offsets, [96, 100, 104, 108, 112, 116, 120, 124, 128, 132]);
+  assert.deepEqual(offsets, [96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136]);
 });
 
 test("dynamic offsets align to the device-required slot size", () => {
@@ -76,7 +77,8 @@ test("writeUniforms places values at the declared offsets", () => {
     starDensity: 0.25,
     fidelity: 1,
     pitch: 0.25,
-    motion: 0
+    motion: 0,
+    roll: -0.25
   });
   assert.equal(view[0], 1280);
   assert.ok(Math.abs(view[4] - 0.1) < 1e-6, "float32 rounding allowed");
@@ -87,6 +89,7 @@ test("writeUniforms places values at the declared offsets", () => {
   assert.equal(view[31], 1);
   assert.equal(view[32], 0.25);
   assert.equal(view[33], 0);
+  assert.equal(view[34], -0.25);
 });
 
 test("slots never overlap: two orbs at consecutive slots stay disjoint", () => {
@@ -108,7 +111,8 @@ test("slots never overlap: two orbs at consecutive slots stay disjoint", () => {
     starDensity: 1,
     fidelity: 1,
     pitch: 0,
-    motion: 1
+    motion: 1,
+    roll: 0
   });
   assert.equal(view[slotBytes + UNIFORM_OFFSETS.time / 4], 99, "slot 1 time written");
   for (let index = 0; index < slotBytes; index += 1) {

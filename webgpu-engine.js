@@ -39,6 +39,7 @@ export const UNIFORM_BYTES = 144;
 //   124 uFidelity f32
 //   128 uPitch     f32
 //   132 uMotion    f32
+//   136 uRoll      f32
 export const UNIFORM_OFFSETS = {
   res: 0,
   bg: 16,
@@ -55,7 +56,8 @@ export const UNIFORM_OFFSETS = {
   starDensity: 120,
   fidelity: 124,
   pitch: 128,
-  motion: 132
+  motion: 132,
+  roll: 136
 };
 
 export function writeUniforms(view, offsets, values) {
@@ -75,6 +77,7 @@ export function writeUniforms(view, offsets, values) {
   view[offsets.fidelity / 4] = values.fidelity;
   view[offsets.pitch / 4] = values.pitch;
   view[offsets.motion / 4] = values.motion;
+  view[offsets.roll / 4] = values.roll;
 }
 
 export class WebGPUEngine {
@@ -304,6 +307,7 @@ export class WebGPUOrbRenderer {
     this.lens = 0.4;
     this.interactionSpin = engine.interactionSpin ?? 0;
     this.interactionPitch = engine.interactionPitch ?? 0;
+    this.interactionRoll = engine.interactionRoll ?? 0;
     this.autonomousSpin = engine.interactiveMotion !== true;
     this.visible = true;
     this.lastWidth = 0;
@@ -380,6 +384,10 @@ export class WebGPUOrbRenderer {
     this.interactionPitch = value;
   }
 
+  setInteractionRoll(value) {
+    this.interactionRoll = value;
+  }
+
   setAutonomousSpin(enabled) {
     this.autonomousSpin = Boolean(enabled);
   }
@@ -435,7 +443,8 @@ export class WebGPUOrbRenderer {
       starDensity: this.starDensity,
       fidelity: this.fidelity,
       pitch: this.interactionPitch,
-      motion: this.autonomousSpin ? 1 : 0
+      motion: this.autonomousSpin ? 1 : 0,
+      roll: this.interactionRoll
     });
     engine.flushUniforms();
 

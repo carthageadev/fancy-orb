@@ -52,6 +52,7 @@ test("interactive motion is off by default", () => {
   assert.match(mainSource, /let interactiveEnabled = false/);
   assert.match(mainSource, /let interactionCurrent = 0/);
   assert.match(mainSource, /let interactionCurrentPitch = 0/);
+  assert.match(mainSource, /let interactionCurrentRoll = 0/);
   assert.match(mainSource, /let interactionPermission = "unknown"/);
   assert.match(mainSource, /let interactionSource = "none"/);
 });
@@ -87,11 +88,13 @@ test("default WebGPU orientation can disable all autonomous sphere motion", () =
 test("OrbRenderer inherits the current interaction orientation", () => {
   assert.match(mainSource, /this\.interactionSpin = interactionCurrent/);
   assert.match(mainSource, /this\.interactionPitch = interactionCurrentPitch/);
+  assert.match(mainSource, /this\.interactionRoll = interactionCurrentRoll/);
 });
 
 test("WebGPUOrbRenderer inherits the engine interaction orientation", () => {
   assert.match(engineSource, /this\.interactionSpin = engine\.interactionSpin \?\? 0/);
   assert.match(engineSource, /this\.interactionPitch = engine\.interactionPitch \?\? 0/);
+  assert.match(engineSource, /this\.interactionRoll = engine\.interactionRoll \?\? 0/);
 });
 
 // --- input listener lifecycle ---
@@ -195,7 +198,9 @@ test("setInteractiveMotion resets state on disable", () => {
   const body = extractMethod(mainSource, "setInteractiveMotion", 0);
   assert.ok(body);
   assert.match(body, /interactionTarget = 0/);
+  assert.match(body, /interactionTargetRoll = 0/);
   assert.match(body, /interactionSource = "none"/);
+  assert.match(body, /gyroNeutralAlpha = null/);
   assert.match(body, /gyroNeutralGamma = null/);
   assert.match(body, /gyroNeutralBeta = null/);
 });
@@ -224,26 +229,30 @@ test("pointer handler maps horizontal yaw and vertical pitch independently", () 
   assert.match(body, /interactionTargetPitch = clamp\(\(normY - 0\.5\) \* 1\.0, -0\.5, 0\.5\)/);
 });
 
-test("orientation handler maps gamma/beta deltas into bounded offset", () => {
+test("orientation handler maps alpha, beta, and gamma to yaw, pitch, and roll", () => {
   const body = extractMethod(mainSource, "onDeviceOrientation", 0);
   assert.ok(body, "onDeviceOrientation() body not found");
-  assert.match(body, /let horizontalDelta = gammaDelta/);
-  assert.match(body, /let verticalDelta = betaDelta/);
-  assert.match(body, /interactionTarget = clamp\(horizontalDelta \* 0\.02, -0\.6, 0\.6\)/);
-  assert.match(body, /interactionTargetPitch = clamp\(-verticalDelta \* 0\.015, -0\.6, 0\.6\)/);
+  assert.match(body, /const \{ alpha, beta, gamma \} = event/);
+  assert.match(body, /const alphaDelta = hasAlpha && gyroNeutralAlpha !== null \? angleDelta\(alpha, gyroNeutralAlpha\) : 0/);
+  assert.match(body, /let pitchDelta = betaDelta/);
+  assert.match(body, /let rollDelta = gammaDelta/);
+  assert.match(body, /interactionTarget = clamp\(alphaDelta \* 0\.015, -0\.6, 0\.6\)/);
+  assert.match(body, /interactionTargetPitch = clamp\(-pitchDelta \* 0\.015, -0\.6, 0\.6\)/);
+  assert.match(body, /interactionTargetRoll = clamp\(rollDelta \* 0\.015, -0\.6, 0\.6\)/);
   assert.match(body, /screenAngle === 90/);
   assert.match(body, /screenAngle === 270/);
 });
 
-test("orientation handler captures neutral baseline on first event", () => {
+test("orientation handler captures neutral baselines on first event", () => {
   const body = extractMethod(mainSource, "onDeviceOrientation", 0);
   assert.ok(body);
+  assert.match(body, /gyroNeutralAlpha = alpha/);
   assert.match(body, /if \(gyroNeutralGamma === null\)/);
   assert.match(body, /gyroNeutralGamma = gamma/);
   assert.match(body, /gyroNeutralBeta = beta/);
 });
 
-test("orientation handler rejects non-finite gamma/beta values", () => {
+test("orientation handler rejects non-finite beta and gamma values", () => {
   const body = extractMethod(mainSource, "onDeviceOrientation", 0);
   assert.ok(body);
   assert.match(body, /typeof gamma !== "number" \|\| typeof beta !== "number"/);
@@ -256,22 +265,25 @@ test("orientation handler rejects non-finite gamma/beta values", () => {
   assert.ok(nonFiniteGuard < baselineCapture, "non-finite guard must precede baseline capture");
 });
 
-test("frame loop smooths shader-space yaw and pitch", () => {
+test("frame loop smooths shader-space yaw, pitch, and roll", () => {
   const frame = extractMethod(mainSource, "frame", 0);
   assert.ok(frame, "frame() body not found");
   assert.match(frame, /interactionCurrent \+= \(target - interactionCurrent\) \* 0\.08/);
   assert.match(frame, /Math\.abs\(interactionCurrent\) < 0\.0001/);
   assert.match(frame, /interactionCurrent = 0/);
   assert.match(frame, /interactionCurrentPitch \+= \(targetPitch - interactionCurrentPitch\) \* 0\.08/);
+  assert.match(frame, /interactionCurrentRoll \+= \(targetRoll - interactionCurrentRoll\) \* 0\.08/);
   assert.match(frame, /rendererPool\[index\]\.setInteractionPitch\(interactionCurrentPitch\)/);
+  assert.match(frame, /rendererPool\[index\]\.setInteractionRoll\(interactionCurrentRoll\)/);
 });
 
 test("frame loop decays interactionCurrent to zero after disable", () => {
   const frame = extractMethod(mainSource, "frame", 0);
   assert.ok(frame, "frame() body not found");
   // The decay guard: continue smoothing when current is non-zero even if disabled
-  assert.match(frame, /interactiveEnabled[\s\S]*interactionCurrent !== 0[\s\S]*interactionCurrentPitch !== 0/);
+  assert.match(frame, /interactiveEnabled[\s\S]*interactionCurrent !== 0[\s\S]*interactionCurrentPitch !== 0[\s\S]*interactionCurrentRoll !== 0/);
   assert.match(frame, /interactionCurrentPitch !== 0/);
+  assert.match(frame, /interactionCurrentRoll !== 0/);
 });
 
 test("both shaders apply interactive pitch inside sphere sampling", () => {
@@ -281,6 +293,12 @@ test("both shaders apply interactive pitch inside sphere sampling", () => {
   assert.match(wgslSource, /n = vec3f\(n\.x, cp \* n\.y - sp \* n\.z, sp \* n\.y \+ cp \* n\.z\)/);
 });
 
+test("both shaders apply interactive roll around the view axis", () => {
+  assert.match(mainSource, /uniform float uRoll/);
+  assert.match(mainSource, /t \* 0\.13 \* uMotion \+ uRoll/);
+  assert.match(wgslSource, /t \* 0\.13 \* u\.motion \+ u\.roll/);
+});
+
 // --- both renderer spin paths ---
 
 test("WebGL render adds interactionSpin to the uSpin uniform", () => {
@@ -288,6 +306,7 @@ test("WebGL render adds interactionSpin to the uSpin uniform", () => {
   assert.ok(render, "WebGL render() body not found");
   assert.match(render, /gl\.uniform1f\(this\.locations\.spin, this\.spin \+ \(this\.autonomousSpin \? time \* 0\.08 : 0\) \+ \(this\.interactionSpin \|\| 0\)\)/);
   assert.match(render, /gl\.uniform1f\(this\.locations\.pitch, this\.interactionPitch\)/);
+  assert.match(render, /gl\.uniform1f\(this\.locations\.roll, this\.interactionRoll\)/);
   assert.match(render, /gl\.uniform1f\(this\.locations\.motion, this\.autonomousSpin \? 1 : 0\)/);
 });
 
@@ -296,6 +315,7 @@ test("WebGPU render adds interactionSpin to the spin uniform", () => {
   assert.ok(render, "WebGPU render() body not found");
   assert.match(render, /spin: this\.spin \+ \(this\.autonomousSpin \? time \* 0\.08 : 0\) \+ \(this\.interactionSpin \|\| 0\)/);
   assert.match(render, /pitch: this\.interactionPitch/);
+  assert.match(render, /roll: this\.interactionRoll/);
   assert.match(render, /motion: this\.autonomousSpin \? 1 : 0/);
 });
 
@@ -314,6 +334,11 @@ test("WebGPUOrbRenderer exposes a setInteractionSpin method", () => {
 test("both renderers expose a shader-space pitch control", () => {
   assert.match(mainSource, /setInteractionPitch\(value\)/);
   assert.match(engineSource, /setInteractionPitch\(value\)/);
+});
+
+test("both renderers expose a shader-space roll control", () => {
+  assert.match(mainSource, /setInteractionRoll\(value\)/);
+  assert.match(engineSource, /setInteractionRoll\(value\)/);
 });
 
 test("both renderers expose autonomous spin controls", () => {
@@ -346,5 +371,7 @@ test("window.__orbDebug exposes interaction state", () => {
   assert.match(mainSource, /current: \+interactionCurrent\.toFixed\(4\)/);
   assert.match(mainSource, /targetPitch: \+interactionTargetPitch\.toFixed\(4\)/);
   assert.match(mainSource, /currentPitch: \+interactionCurrentPitch\.toFixed\(4\)/);
+  assert.match(mainSource, /targetRoll: \+interactionTargetRoll\.toFixed\(4\)/);
+  assert.match(mainSource, /currentRoll: \+interactionCurrentRoll\.toFixed\(4\)/);
   assert.match(mainSource, /permission: interactionPermission/);
 });

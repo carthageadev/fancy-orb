@@ -118,10 +118,10 @@ animation and visuals are unchanged; when checked:
 - **Desktop**: pointer movement anywhere in the viewport guides the orb.
   Horizontal position controls yaw (±0.6 radians) and vertical position
   controls pitch (±0.5 radians), even while hovering controls or text.
-- **Mobile**: device orientation maps gamma/beta into independent screen axes.
-  Left/right tilt controls horizontal spin, while forward/back tilt controls a
-  visible up/down pitch. A neutral baseline is captured on enable, and the
-  mapping follows portrait or landscape screen orientation.
+- **Mobile**: device orientation maps all three rotation axes relative to a
+  neutral baseline: alpha controls yaw, beta controls front/back pitch, and
+  gamma controls left/right roll. Pitch and roll follow portrait or landscape
+  screen orientation.
 - **iOS Safari**: `DeviceOrientationEvent.requestPermission()` is requested
   from the checkbox user gesture. If permission is denied or the API is
   unavailable, the toggle remains checked but the hint updates to indicate
@@ -132,11 +132,12 @@ animation and visuals are unchanged; when checked:
 The interaction offset is smoothly interpolated per frame and added to the
 existing `uSpin` uniform. Interactive mode disables only the autonomous sphere
 spin; the shared shader clock keeps running, so shooting stars, shimmer, and
-aurora motion continue. The renderers carry compact pitch and motion uniforms
-for the two-axis sphere orientation. Listeners are registered only while the
+aurora motion continue. The renderers carry compact pitch, roll, and motion
+uniforms for the three-axis sphere orientation. Listeners are registered only while the
 mode is active, and the offset decays cleanly to zero when disabled.
 
-Pointer and tilt drive yaw and pitch inside the sphere shaders, rather than
+Pointer drives yaw and pitch, while phone tilt drives yaw, pitch, and roll
+inside the sphere shaders, rather than
 tilting the canvas. The galaxy therefore moves over the orb surface like a real
 ball in both directions. Autonomous roll and precession stop in interactive
 mode while independent visual effects continue from the shared shader clock.

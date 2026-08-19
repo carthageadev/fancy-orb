@@ -72,6 +72,9 @@ let interactionTarget = 0;
 let interactionCurrent = 0;
 let interactionTargetPitch = 0;
 let interactionCurrentPitch = 0;
+let interactionTargetRoll = 0;
+let interactionCurrentRoll = 0;
+let gyroNeutralAlpha = null;
 let gyroNeutralGamma = null;
 let gyroNeutralBeta = null;
 let interactiveCheckbox = null;
@@ -158,10 +161,10 @@ function getFragmentShaderSource(gl) {
   const precision = getFragmentPrecision(gl);
   return highQualityFragmentShader
     .replace("precision highp float;", `precision ${precision} float;`)
-    .replace("uniform float uSpin; // CPU-integrated spin angle (can accelerate & reverse)", "uniform float uSpin; // CPU-integrated yaw angle\nuniform float uPitch; // interactive vertical sphere rotation\nuniform float uMotion; // 1 for autonomous roll/precession, 0 for interactive mode")
+    .replace("uniform float uSpin; // CPU-integrated spin angle (can accelerate & reverse)", "uniform float uSpin; // CPU-integrated yaw angle\nuniform float uPitch; // interactive vertical sphere rotation\nuniform float uRoll; // interactive view-axis sphere rotation\nuniform float uMotion; // 1 for autonomous roll/precession, 0 for interactive mode")
     .replace("uniform float uStarDensity;", "uniform float uStarDensity;\nuniform float uFidelity;")
     .replace("float detail = smoothstep(90.0, 200.0, uRes.y);", "float detail = smoothstep(90.0, 200.0, uRes.y) * uFidelity;")
-    .replace("float roll = t * 0.13; // roll around the view axis", "float roll = t * 0.13 * uMotion; // roll around the view axis")
+    .replace("float roll = t * 0.13; // roll around the view axis", "float roll = t * 0.13 * uMotion + uRoll; // roll around the view axis")
     .replace("float tilt = 0.45 + 0.35 * sin(t * 0.24); // precessing axis", "float tilt = (0.45 + 0.35 * sin(t * 0.24)) * uMotion; // precessing axis")
     .replace("n = vec3(cs * n.x + ss * n.z, n.y, -ss * n.x + cs * n.z);\n  return starfield(n, t);", "n = vec3(cs * n.x + ss * n.z, n.y, -ss * n.x + cs * n.z);\n  float cp = cos(uPitch);\n  float sp = sin(uPitch);\n  n = vec3(n.x, cp * n.y - sp * n.z, sp * n.y + cp * n.z);\n  return starfield(n, t);")
     .replace("gl_FragColor = vec4(col, 1.0);", "gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);")
@@ -252,6 +255,7 @@ class OrbRenderer {
     this.lens = LENS_ON_VALUE;
     this.interactionSpin = interactionCurrent;
     this.interactionPitch = interactionCurrentPitch;
+    this.interactionRoll = interactionCurrentRoll;
     this.autonomousSpin = !interactiveEnabled;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
@@ -302,6 +306,7 @@ class OrbRenderer {
       audio: gl.getUniformLocation(this.program, "uAudio"),
       spin: gl.getUniformLocation(this.program, "uSpin"),
       pitch: gl.getUniformLocation(this.program, "uPitch"),
+      roll: gl.getUniformLocation(this.program, "uRoll"),
       motion: gl.getUniformLocation(this.program, "uMotion"),
       archetype: gl.getUniformLocation(this.program, "uArch"),
       lens: gl.getUniformLocation(this.program, "uLens"),
@@ -381,6 +386,10 @@ class OrbRenderer {
     this.interactionPitch = value;
   }
 
+  setInteractionRoll(value) {
+    this.interactionRoll = value;
+  }
+
   setAutonomousSpin(enabled) {
     this.autonomousSpin = Boolean(enabled);
   }
@@ -451,6 +460,7 @@ class OrbRenderer {
     gl.uniform1f(this.locations.time, time);
     gl.uniform1f(this.locations.spin, this.spin + (this.autonomousSpin ? time * 0.08 : 0) + (this.interactionSpin || 0));
     gl.uniform1f(this.locations.pitch, this.interactionPitch);
+    gl.uniform1f(this.locations.roll, this.interactionRoll);
     gl.uniform1f(this.locations.motion, this.autonomousSpin ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
@@ -572,7 +582,7 @@ function applyDebugSetting(enabled) {
 // the mode is active, so there is zero per-frame overhead when disabled.
 
 function onInteractivePointerMove(event) {
-  if (!interactiveEnabled || window.innerWidth === 0 || window.innerHeight === 0) return;
+  if (!interactiveEnabled || interactionSource === "orientation" || window.innerWidth === 0 || window.innerHeight === 0) return;
   const normX = event.clientX / window.innerWidth;
   const normY = event.clientY / window.innerHeight;
   // Screen axes stay independent: horizontal yaw and vertical pitch.
@@ -580,42 +590,49 @@ function onInteractivePointerMove(event) {
   // Sphere sampling is inverse-mapped, so the pointer Y sign is reversed to
   // make the visible surface travel with the cursor rather than against it.
   interactionTargetPitch = clamp((normY - 0.5) * 1.0, -0.5, 0.5);
-  if (interactionSource !== "orientation") interactionSource = "pointer";
+  interactionTargetRoll = 0;
+  interactionSource = "pointer";
 }
 
-// Device orientation handler. Map the physical device axes into screen
-// horizontal/vertical axes first, then keep horizontal spin and vertical tilt
-// independent. This also keeps the controls intuitive after rotating the phone
-// into landscape.
+function angleDelta(angle, neutral) {
+  return ((angle - neutral + 540) % 360) - 180;
+}
+
+// Device orientation handler. DeviceOrientation reports alpha around z (yaw),
+// beta around x (pitch), and gamma around y (roll). Pitch and roll are remapped
+// into screen coordinates for landscape, while yaw remains around the screen's
+// view axis.
 function onDeviceOrientation(event) {
   if (!interactiveEnabled) return;
-  const { gamma, beta } = event;
+  const { alpha, beta, gamma } = event;
   if (gamma === null || beta === null) return;
   if (typeof gamma !== "number" || typeof beta !== "number"
       || !Number.isFinite(gamma) || !Number.isFinite(beta)) return;
+  const hasAlpha = typeof alpha === "number" && Number.isFinite(alpha);
+  if (hasAlpha && gyroNeutralAlpha === null) gyroNeutralAlpha = alpha;
   if (gyroNeutralGamma === null) {
     gyroNeutralGamma = gamma;
     gyroNeutralBeta = beta;
   }
-  const gammaDelta = gamma - gyroNeutralGamma;
+  const alphaDelta = hasAlpha && gyroNeutralAlpha !== null ? angleDelta(alpha, gyroNeutralAlpha) : 0;
   const betaDelta = beta - gyroNeutralBeta;
+  const gammaDelta = gamma - gyroNeutralGamma;
   const screenAngle = ((Number(window.screen?.orientation?.angle ?? window.orientation ?? 0) % 360) + 360) % 360;
-  let horizontalDelta = gammaDelta;
-  let verticalDelta = betaDelta;
+  let pitchDelta = betaDelta;
+  let rollDelta = gammaDelta;
   if (screenAngle === 90) {
-    horizontalDelta = betaDelta;
-    verticalDelta = -gammaDelta;
+    pitchDelta = -gammaDelta;
+    rollDelta = betaDelta;
   } else if (screenAngle === 180) {
-    horizontalDelta = -gammaDelta;
-    verticalDelta = -betaDelta;
+    pitchDelta = -betaDelta;
+    rollDelta = -gammaDelta;
   } else if (screenAngle === 270) {
-    horizontalDelta = -betaDelta;
-    verticalDelta = gammaDelta;
+    pitchDelta = gammaDelta;
+    rollDelta = -betaDelta;
   }
-  // Horizontal movement controls yaw; vertical movement controls the actual
-  // shader-space pitch of the sphere.
-  interactionTarget = clamp(horizontalDelta * 0.02, -0.6, 0.6);
-  interactionTargetPitch = clamp(-verticalDelta * 0.015, -0.6, 0.6);
+  interactionTarget = clamp(alphaDelta * 0.015, -0.6, 0.6);
+  interactionTargetPitch = clamp(-pitchDelta * 0.015, -0.6, 0.6);
+  interactionTargetRoll = clamp(rollDelta * 0.015, -0.6, 0.6);
   interactionSource = "orientation";
 }
 
@@ -684,7 +701,9 @@ async function setInteractiveMotion(enabled) {
     removeInteractiveListeners();
     interactionTarget = 0;
     interactionTargetPitch = 0;
+    interactionTargetRoll = 0;
     interactionSource = "none";
+    gyroNeutralAlpha = null;
     gyroNeutralGamma = null;
     gyroNeutralBeta = null;
   }
@@ -990,6 +1009,7 @@ async function initializeWebGPU(token) {
     engine.interactiveMotion = interactiveEnabled;
     engine.interactionSpin = interactionCurrent;
     engine.interactionPitch = interactionCurrentPitch;
+    engine.interactionRoll = interactionCurrentRoll;
     engine.compactQuery = compactDeviceQuery;
     engine.compactMaxDpr = 1.25;
     // Wire the once-only loss/uncaptured-error handler BEFORE initialize: an
@@ -1250,20 +1270,26 @@ function frame(now) {
   // Smooth interactive motion offset toward the target (zero overhead when off and settled)
   if (interactiveEnabled
       || interactionCurrent !== 0
-      || interactionCurrentPitch !== 0) {
+      || interactionCurrentPitch !== 0
+      || interactionCurrentRoll !== 0) {
     const target = interactiveEnabled ? interactionTarget : 0;
     interactionCurrent += (target - interactionCurrent) * 0.08;
     const targetPitch = interactiveEnabled ? interactionTargetPitch : 0;
     interactionCurrentPitch += (targetPitch - interactionCurrentPitch) * 0.08;
+    const targetRoll = interactiveEnabled ? interactionTargetRoll : 0;
+    interactionCurrentRoll += (targetRoll - interactionCurrentRoll) * 0.08;
     if (Math.abs(interactionCurrent) < 0.0001) interactionCurrent = 0;
     if (Math.abs(interactionCurrentPitch) < 0.0001) interactionCurrentPitch = 0;
+    if (Math.abs(interactionCurrentRoll) < 0.0001) interactionCurrentRoll = 0;
     if (gpuEngine) {
       gpuEngine.interactionSpin = interactionCurrent;
       gpuEngine.interactionPitch = interactionCurrentPitch;
+      gpuEngine.interactionRoll = interactionCurrentRoll;
     }
     for (let index = 0; index < rendererPool.length; index += 1) {
       rendererPool[index].setInteractionSpin(interactionCurrent);
       rendererPool[index].setInteractionPitch(interactionCurrentPitch);
+      rendererPool[index].setInteractionRoll(interactionCurrentRoll);
       rendererPool[index].setAutonomousSpin(!interactiveEnabled);
     }
   }
@@ -1350,6 +1376,8 @@ window.__orbDebug = () => ({
     current: +interactionCurrent.toFixed(4),
     targetPitch: +interactionTargetPitch.toFixed(4),
     currentPitch: +interactionCurrentPitch.toFixed(4),
+    targetRoll: +interactionTargetRoll.toFixed(4),
+    currentRoll: +interactionCurrentRoll.toFixed(4),
     permission: interactionPermission
   }
 });
