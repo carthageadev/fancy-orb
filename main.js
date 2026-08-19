@@ -70,10 +70,8 @@ let interactionPermission = "unknown"; // "unknown" | "granted" | "denied" | "un
 let interactionSource = "none"; // "none" | "pointer" | "orientation"
 let interactionTarget = 0;
 let interactionCurrent = 0;
-let interactionTargetTiltX = 0;
-let interactionTargetTiltY = 0;
-let interactionCurrentTiltX = 0;
-let interactionCurrentTiltY = 0;
+let interactionTargetPitch = 0;
+let interactionCurrentPitch = 0;
 let gyroNeutralGamma = null;
 let gyroNeutralBeta = null;
 let interactiveCheckbox = null;
@@ -160,8 +158,12 @@ function getFragmentShaderSource(gl) {
   const precision = getFragmentPrecision(gl);
   return highQualityFragmentShader
     .replace("precision highp float;", `precision ${precision} float;`)
+    .replace("uniform float uSpin; // CPU-integrated spin angle (can accelerate & reverse)", "uniform float uSpin; // CPU-integrated yaw angle\nuniform float uPitch; // interactive vertical sphere rotation\nuniform float uMotion; // 1 for autonomous roll/precession, 0 for interactive mode")
     .replace("uniform float uStarDensity;", "uniform float uStarDensity;\nuniform float uFidelity;")
     .replace("float detail = smoothstep(90.0, 200.0, uRes.y);", "float detail = smoothstep(90.0, 200.0, uRes.y) * uFidelity;")
+    .replace("float roll = t * 0.13; // roll around the view axis", "float roll = t * 0.13 * uMotion; // roll around the view axis")
+    .replace("float tilt = 0.45 + 0.35 * sin(t * 0.24); // precessing axis", "float tilt = (0.45 + 0.35 * sin(t * 0.24)) * uMotion; // precessing axis")
+    .replace("n = vec3(cs * n.x + ss * n.z, n.y, -ss * n.x + cs * n.z);\n  return starfield(n, t);", "n = vec3(cs * n.x + ss * n.z, n.y, -ss * n.x + cs * n.z);\n  float cp = cos(uPitch);\n  float sp = sin(uPitch);\n  n = vec3(n.x, cp * n.y - sp * n.z, sp * n.y + cp * n.z);\n  return starfield(n, t);")
     .replace("gl_FragColor = vec4(col, 1.0);", "gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);")
     .replace("gl_FragColor = vec4(shade(p), 1.0);", "gl_FragColor = vec4(clamp(shade(p), 0.0, 1.0), 1.0);");
 }
@@ -248,8 +250,9 @@ class OrbRenderer {
     this.displayScale = 1;
     this.fidelity = fidelityValue;
     this.lens = LENS_ON_VALUE;
-    this.interactionSpin = 0;
-    this.autonomousSpin = true;
+    this.interactionSpin = interactionCurrent;
+    this.interactionPitch = interactionCurrentPitch;
+    this.autonomousSpin = !interactiveEnabled;
     this.setOrb(data, index);
     this.gl = createWebGLContext(canvas);
     if (!this.gl) {
@@ -298,6 +301,8 @@ class OrbRenderer {
       phase: gl.getUniformLocation(this.program, "uPhase"),
       audio: gl.getUniformLocation(this.program, "uAudio"),
       spin: gl.getUniformLocation(this.program, "uSpin"),
+      pitch: gl.getUniformLocation(this.program, "uPitch"),
+      motion: gl.getUniformLocation(this.program, "uMotion"),
       archetype: gl.getUniformLocation(this.program, "uArch"),
       lens: gl.getUniformLocation(this.program, "uLens"),
       starDensity: gl.getUniformLocation(this.program, "uStarDensity"),
@@ -372,6 +377,10 @@ class OrbRenderer {
     this.interactionSpin = value;
   }
 
+  setInteractionPitch(value) {
+    this.interactionPitch = value;
+  }
+
   setAutonomousSpin(enabled) {
     this.autonomousSpin = Boolean(enabled);
   }
@@ -436,11 +445,13 @@ class OrbRenderer {
     if (contextLost) return false;
     this.resize();
     const gl = this.gl;
-    // Per-frame uniforms only: time and the animated spin. Everything else is
+    // Per-frame uniforms only: time and the animated sphere orientation. Everything else is
     // static GL state or an unchanged uniform re-uploaded by the setters and
     // initializeGpu().
     gl.uniform1f(this.locations.time, time);
     gl.uniform1f(this.locations.spin, this.spin + (this.autonomousSpin ? time * 0.08 : 0) + (this.interactionSpin || 0));
+    gl.uniform1f(this.locations.pitch, this.interactionPitch);
+    gl.uniform1f(this.locations.motion, this.autonomousSpin ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
   }
@@ -566,19 +577,15 @@ function onInteractivePointerMove(event) {
   if (rect.width === 0 || rect.height === 0) return;
   const normX = (event.clientX - rect.left) / rect.width;
   const normY = (event.clientY - rect.top) / rect.height;
-  // Primary X maps to [-0.6, 0.6]; small Y contribution adds up to ±0.06
-  const targetX = (normX - 0.5) * 1.2;
-  const targetY = (normY - 0.5) * 0.12;
-  interactionTarget = clamp(targetX + targetY, -0.6, 0.6);
-  interactionTargetTiltX = clamp((0.5 - normY) * 10, -8, 8);
-  interactionTargetTiltY = clamp((normX - 0.5) * 10, -8, 8);
+  // Screen axes stay independent: horizontal yaw and vertical pitch.
+  interactionTarget = clamp((normX - 0.5) * 1.2, -0.6, 0.6);
+  interactionTargetPitch = clamp((0.5 - normY) * 1.0, -0.5, 0.5);
   if (interactionSource !== "orientation") interactionSource = "pointer";
 }
 
 function onInteractivePointerLeave() {
   interactionTarget = 0;
-  interactionTargetTiltX = 0;
-  interactionTargetTiltY = 0;
+  interactionTargetPitch = 0;
 }
 
 // Device orientation handler. Map the physical device axes into screen
@@ -610,11 +617,10 @@ function onDeviceOrientation(event) {
     horizontalDelta = -betaDelta;
     verticalDelta = gammaDelta;
   }
-  // Horizontal movement controls spin; vertical movement controls visible
-  // pitch. The larger tilt range makes up/down motion clear on a flat canvas.
+  // Horizontal movement controls yaw; vertical movement controls the actual
+  // shader-space pitch of the sphere.
   interactionTarget = clamp(horizontalDelta * 0.02, -0.6, 0.6);
-  interactionTargetTiltX = clamp(-verticalDelta * 0.45, -18, 18);
-  interactionTargetTiltY = clamp(horizontalDelta * 0.45, -18, 18);
+  interactionTargetPitch = clamp(-verticalDelta * 0.015, -0.6, 0.6);
   interactionSource = "orientation";
 }
 
@@ -678,16 +684,17 @@ async function setInteractiveMotion(enabled) {
 
   if (enabled) {
     // Keep shader time alive for effects while replacing only autonomous spin.
+    if (gpuEngine) gpuEngine.interactiveMotion = true;
     rendererPool.forEach((renderer) => renderer.setAutonomousSpin(false));
     await requestOrientationPermission();
     if (!interactiveEnabled) return;
     addInteractiveListeners();
   } else {
+    if (gpuEngine) gpuEngine.interactiveMotion = false;
     rendererPool.forEach((renderer) => renderer.setAutonomousSpin(true));
     removeInteractiveListeners();
     interactionTarget = 0;
-    interactionTargetTiltX = 0;
-    interactionTargetTiltY = 0;
+    interactionTargetPitch = 0;
     interactionSource = "none";
     gyroNeutralGamma = null;
     gyroNeutralBeta = null;
@@ -991,6 +998,9 @@ async function initializeWebGPU(token) {
       return;
     }
     gpuEngine = engine;
+    engine.interactiveMotion = interactiveEnabled;
+    engine.interactionSpin = interactionCurrent;
+    engine.interactionPitch = interactionCurrentPitch;
     engine.compactQuery = compactDeviceQuery;
     engine.compactMaxDpr = 1.25;
     // Wire the once-only loss/uncaptured-error handler BEFORE initialize: an
@@ -1251,21 +1261,20 @@ function frame(now) {
   // Smooth interactive motion offset toward the target (zero overhead when off and settled)
   if (interactiveEnabled
       || interactionCurrent !== 0
-      || interactionCurrentTiltX !== 0
-      || interactionCurrentTiltY !== 0) {
+      || interactionCurrentPitch !== 0) {
     const target = interactiveEnabled ? interactionTarget : 0;
     interactionCurrent += (target - interactionCurrent) * 0.08;
-    const targetTiltX = interactiveEnabled ? interactionTargetTiltX : 0;
-    const targetTiltY = interactiveEnabled ? interactionTargetTiltY : 0;
-    interactionCurrentTiltX += (targetTiltX - interactionCurrentTiltX) * 0.08;
-    interactionCurrentTiltY += (targetTiltY - interactionCurrentTiltY) * 0.08;
+    const targetPitch = interactiveEnabled ? interactionTargetPitch : 0;
+    interactionCurrentPitch += (targetPitch - interactionCurrentPitch) * 0.08;
     if (Math.abs(interactionCurrent) < 0.0001) interactionCurrent = 0;
-    if (Math.abs(interactionCurrentTiltX) < 0.001) interactionCurrentTiltX = 0;
-    if (Math.abs(interactionCurrentTiltY) < 0.001) interactionCurrentTiltY = 0;
-    orbStage?.style.setProperty("--orb-tilt-x", `${interactionCurrentTiltX.toFixed(2)}deg`);
-    orbStage?.style.setProperty("--orb-tilt-y", `${interactionCurrentTiltY.toFixed(2)}deg`);
+    if (Math.abs(interactionCurrentPitch) < 0.0001) interactionCurrentPitch = 0;
+    if (gpuEngine) {
+      gpuEngine.interactionSpin = interactionCurrent;
+      gpuEngine.interactionPitch = interactionCurrentPitch;
+    }
     for (let index = 0; index < rendererPool.length; index += 1) {
       rendererPool[index].setInteractionSpin(interactionCurrent);
+      rendererPool[index].setInteractionPitch(interactionCurrentPitch);
       rendererPool[index].setAutonomousSpin(!interactiveEnabled);
     }
   }
@@ -1350,10 +1359,8 @@ window.__orbDebug = () => ({
     source: interactionSource,
     target: +interactionTarget.toFixed(4),
     current: +interactionCurrent.toFixed(4),
-    targetTiltX: +interactionTargetTiltX.toFixed(2),
-    targetTiltY: +interactionTargetTiltY.toFixed(2),
-    currentTiltX: +interactionCurrentTiltX.toFixed(2),
-    currentTiltY: +interactionCurrentTiltY.toFixed(2),
+    targetPitch: +interactionTargetPitch.toFixed(4),
+    currentPitch: +interactionCurrentPitch.toFixed(4),
     permission: interactionPermission
   }
 });

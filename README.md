@@ -132,14 +132,14 @@ animation and visuals are unchanged; when checked:
 The interaction offset is smoothly interpolated per frame and added to the
 existing `uSpin` uniform. Interactive mode disables only the autonomous sphere
 spin; the shared shader clock keeps running, so shooting stars, shimmer, and
-aurora motion continue. No new uniforms, shader changes, or WGSL layout changes
-are required. Listeners are registered only while the mode is active, and the
-offset decays cleanly to zero when disabled.
+aurora motion continue. The renderers carry compact pitch and motion uniforms
+for the two-axis sphere orientation. Listeners are registered only while the
+mode is active, and the offset decays cleanly to zero when disabled.
 
-Pointer and tilt also drive a restrained two-axis 3D transform on the orb
-visual, so interactive mode follows vertical movement as well as left/right
-rotation. The transform defaults to zero and is applied only while the mode is
-active or its values are easing back to rest.
+Pointer and tilt drive yaw and pitch inside the sphere shaders, rather than
+tilting the canvas. The galaxy therefore moves over the orb surface like a real
+ball in both directions. Autonomous roll and precession stop in interactive
+mode while independent visual effects continue from the shared shader clock.
 
 `window.__orbDebug().interaction` exposes the current enabled state, input
 source, target/current offsets, and permission status.

@@ -19,7 +19,7 @@ import { buildOrbSpec, specFromSeed } from "./orb-spec.js";
 import { HERO_WGSL } from "./webgpu-shaders.js";
 
 export const UNIFORM_SLOT_ALIGN = 256; // dynamic offsets must align to device limit (usually 256)
-export const UNIFORM_BYTES = 128;
+export const UNIFORM_BYTES = 144;
 
 // Uniform layout — WGSL struct in webgpu-shaders.js must match this exactly.
 // Offsets (std140-style):
@@ -37,6 +37,8 @@ export const UNIFORM_BYTES = 128;
 //   116 uLens     f32
 //   120 uStarDensity f32
 //   124 uFidelity f32
+//   128 uPitch     f32
+//   132 uMotion    f32
 export const UNIFORM_OFFSETS = {
   res: 0,
   bg: 16,
@@ -51,7 +53,9 @@ export const UNIFORM_OFFSETS = {
   arch: 112,
   lens: 116,
   starDensity: 120,
-  fidelity: 124
+  fidelity: 124,
+  pitch: 128,
+  motion: 132
 };
 
 export function writeUniforms(view, offsets, values) {
@@ -69,6 +73,8 @@ export function writeUniforms(view, offsets, values) {
   view[offsets.lens / 4] = values.lens;
   view[offsets.starDensity / 4] = values.starDensity;
   view[offsets.fidelity / 4] = values.fidelity;
+  view[offsets.pitch / 4] = values.pitch;
+  view[offsets.motion / 4] = values.motion;
 }
 
 export class WebGPUEngine {
@@ -296,8 +302,9 @@ export class WebGPUOrbRenderer {
     this.displayScale = 1;
     this.fidelity = 1;
     this.lens = 0.4;
-    this.interactionSpin = 0;
-    this.autonomousSpin = true;
+    this.interactionSpin = engine.interactionSpin ?? 0;
+    this.interactionPitch = engine.interactionPitch ?? 0;
+    this.autonomousSpin = engine.interactiveMotion !== true;
     this.visible = true;
     this.lastWidth = 0;
     this.lastHeight = 0;
@@ -369,6 +376,10 @@ export class WebGPUOrbRenderer {
     this.interactionSpin = value;
   }
 
+  setInteractionPitch(value) {
+    this.interactionPitch = value;
+  }
+
   setAutonomousSpin(enabled) {
     this.autonomousSpin = Boolean(enabled);
   }
@@ -422,7 +433,9 @@ export class WebGPUOrbRenderer {
       arch: -1,
       lens: this.lens,
       starDensity: this.starDensity,
-      fidelity: this.fidelity
+      fidelity: this.fidelity,
+      pitch: this.interactionPitch,
+      motion: this.autonomousSpin ? 1 : 0
     });
     engine.flushUniforms();
 

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 const mainSource = readFileSync(new URL("../main.js", import.meta.url), "utf8");
 const engineSource = readFileSync(new URL("../webgpu-engine.js", import.meta.url), "utf8");
-const stylesSource = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+const wgslSource = readFileSync(new URL("../webgpu-shaders.js", import.meta.url), "utf8");
 
 // Extract the body of a top-level or class method at the given indentation.
 // Handles async functions and balances braces so nested callbacks and object
@@ -51,8 +51,7 @@ function extractMethod(source, name, indent = 0) {
 test("interactive motion is off by default", () => {
   assert.match(mainSource, /let interactiveEnabled = false/);
   assert.match(mainSource, /let interactionCurrent = 0/);
-  assert.match(mainSource, /let interactionCurrentTiltX = 0/);
-  assert.match(mainSource, /let interactionCurrentTiltY = 0/);
+  assert.match(mainSource, /let interactionCurrentPitch = 0/);
   assert.match(mainSource, /let interactionPermission = "unknown"/);
   assert.match(mainSource, /let interactionSource = "none"/);
 });
@@ -71,22 +70,28 @@ test("interactive mode toggles autonomous spin without freezing uTime", () => {
   assert.ok(body, "setInteractiveMotion() body not found");
   assert.match(body, /renderer\.setAutonomousSpin\(false\)/);
   assert.match(body, /renderer\.setAutonomousSpin\(true\)/);
+  assert.match(body, /gpuEngine\.interactiveMotion = true/);
+  assert.match(body, /gpuEngine\.interactiveMotion = false/);
 });
 
-test("default WebGL spin formula can disable autonomous spin while keeping interactionSpin", () => {
+test("default WebGL orientation can disable all autonomous sphere motion", () => {
   assert.match(mainSource, /this\.spin \+ \(this\.autonomousSpin \? time \* 0\.08 : 0\) \+ \(this\.interactionSpin \|\| 0\)/);
+  assert.match(mainSource, /gl\.uniform1f\(this\.locations\.motion, this\.autonomousSpin \? 1 : 0\)/);
 });
 
-test("default WebGPU spin formula can disable autonomous spin while keeping interactionSpin", () => {
+test("default WebGPU orientation can disable all autonomous sphere motion", () => {
   assert.match(engineSource, /this\.spin \+ \(this\.autonomousSpin \? time \* 0\.08 : 0\) \+ \(this\.interactionSpin \|\| 0\)/);
+  assert.match(engineSource, /motion: this\.autonomousSpin \? 1 : 0/);
 });
 
-test("OrbRenderer initializes interactionSpin to 0", () => {
-  assert.match(mainSource, /this\.interactionSpin = 0/);
+test("OrbRenderer inherits the current interaction orientation", () => {
+  assert.match(mainSource, /this\.interactionSpin = interactionCurrent/);
+  assert.match(mainSource, /this\.interactionPitch = interactionCurrentPitch/);
 });
 
-test("WebGPUOrbRenderer initializes interactionSpin to 0", () => {
-  assert.match(engineSource, /this\.interactionSpin = 0/);
+test("WebGPUOrbRenderer inherits the engine interaction orientation", () => {
+  assert.match(engineSource, /this\.interactionSpin = engine\.interactionSpin \?\? 0/);
+  assert.match(engineSource, /this\.interactionPitch = engine\.interactionPitch \?\? 0/);
 });
 
 // --- input listener lifecycle ---
@@ -209,14 +214,13 @@ test("clamp function bounds values between min and max", () => {
   assert.match(body, /value < min \? min : value > max \? max : value/);
 });
 
-test("pointer handler maps x to [-0.6, 0.6] range and clamps", () => {
+test("pointer handler maps horizontal yaw and vertical pitch independently", () => {
   const body = extractMethod(mainSource, "onInteractivePointerMove", 0);
   assert.ok(body, "onInteractivePointerMove() body not found");
   assert.match(body, /\(normX - 0\.5\) \* 1\.2/, "x mapping to [-0.6, 0.6]");
-  assert.match(body, /\(normY - 0\.5\) \* 0\.12/, "small y contribution");
-  assert.match(body, /clamp\(targetX \+ targetY, -0\.6, 0\.6\)/, "clamped to [-0.6, 0.6]");
-  assert.match(body, /interactionTargetTiltX = clamp\(\(0\.5 - normY\) \* 10, -8, 8\)/);
-  assert.match(body, /interactionTargetTiltY = clamp\(\(normX - 0\.5\) \* 10, -8, 8\)/);
+  assert.match(body, /interactionTarget = clamp\(\(normX - 0\.5\) \* 1\.2, -0\.6, 0\.6\)/);
+  assert.doesNotMatch(body, /targetY/);
+  assert.match(body, /interactionTargetPitch = clamp\(\(0\.5 - normY\) \* 1\.0, -0\.5, 0\.5\)/);
 });
 
 test("orientation handler maps gamma/beta deltas into bounded offset", () => {
@@ -225,8 +229,7 @@ test("orientation handler maps gamma/beta deltas into bounded offset", () => {
   assert.match(body, /let horizontalDelta = gammaDelta/);
   assert.match(body, /let verticalDelta = betaDelta/);
   assert.match(body, /interactionTarget = clamp\(horizontalDelta \* 0\.02, -0\.6, 0\.6\)/);
-  assert.match(body, /interactionTargetTiltX = clamp\(-verticalDelta \* 0\.45, -18, 18\)/);
-  assert.match(body, /interactionTargetTiltY = clamp\(horizontalDelta \* 0\.45, -18, 18\)/);
+  assert.match(body, /interactionTargetPitch = clamp\(-verticalDelta \* 0\.015, -0\.6, 0\.6\)/);
   assert.match(body, /screenAngle === 90/);
   assert.match(body, /screenAngle === 270/);
 });
@@ -252,31 +255,29 @@ test("orientation handler rejects non-finite gamma/beta values", () => {
   assert.ok(nonFiniteGuard < baselineCapture, "non-finite guard must precede baseline capture");
 });
 
-test("frame loop applies smoothing with factor 0.08 and decay threshold", () => {
+test("frame loop smooths shader-space yaw and pitch", () => {
   const frame = extractMethod(mainSource, "frame", 0);
   assert.ok(frame, "frame() body not found");
   assert.match(frame, /interactionCurrent \+= \(target - interactionCurrent\) \* 0\.08/);
   assert.match(frame, /Math\.abs\(interactionCurrent\) < 0\.0001/);
   assert.match(frame, /interactionCurrent = 0/);
-  assert.match(frame, /interactionCurrentTiltX \+= \(targetTiltX - interactionCurrentTiltX\) \* 0\.08/);
-  assert.match(frame, /interactionCurrentTiltY \+= \(targetTiltY - interactionCurrentTiltY\) \* 0\.08/);
-  assert.match(frame, /--orb-tilt-x/);
-  assert.match(frame, /--orb-tilt-y/);
+  assert.match(frame, /interactionCurrentPitch \+= \(targetPitch - interactionCurrentPitch\) \* 0\.08/);
+  assert.match(frame, /rendererPool\[index\]\.setInteractionPitch\(interactionCurrentPitch\)/);
 });
 
 test("frame loop decays interactionCurrent to zero after disable", () => {
   const frame = extractMethod(mainSource, "frame", 0);
   assert.ok(frame, "frame() body not found");
   // The decay guard: continue smoothing when current is non-zero even if disabled
-  assert.match(frame, /interactiveEnabled[\s\S]*interactionCurrent !== 0[\s\S]*interactionCurrentTiltX !== 0/);
-  assert.match(frame, /interactionCurrentTiltX !== 0/);
-  assert.match(frame, /interactionCurrentTiltY !== 0/);
+  assert.match(frame, /interactiveEnabled[\s\S]*interactionCurrent !== 0[\s\S]*interactionCurrentPitch !== 0/);
+  assert.match(frame, /interactionCurrentPitch !== 0/);
 });
 
-test("orb visual exposes a visible two-axis perspective tilt", () => {
-  assert.match(stylesSource, /perspective\(700px\) rotateX\(var\(--orb-tilt-x/);
-  assert.match(stylesSource, /rotateY\(var\(--orb-tilt-y/);
-  assert.match(stylesSource, /transform-style: preserve-3d/);
+test("both shaders apply interactive pitch inside sphere sampling", () => {
+  assert.match(mainSource, /uniform float uPitch/);
+  assert.match(mainSource, /float cp = cos\(uPitch\)/);
+  assert.match(wgslSource, /let cp = cos\(u\.pitch\)/);
+  assert.match(wgslSource, /n = vec3f\(n\.x, cp \* n\.y - sp \* n\.z, sp \* n\.y \+ cp \* n\.z\)/);
 });
 
 // --- both renderer spin paths ---
@@ -285,12 +286,16 @@ test("WebGL render adds interactionSpin to the uSpin uniform", () => {
   const render = extractMethod(mainSource, "render", 2);
   assert.ok(render, "WebGL render() body not found");
   assert.match(render, /gl\.uniform1f\(this\.locations\.spin, this\.spin \+ \(this\.autonomousSpin \? time \* 0\.08 : 0\) \+ \(this\.interactionSpin \|\| 0\)\)/);
+  assert.match(render, /gl\.uniform1f\(this\.locations\.pitch, this\.interactionPitch\)/);
+  assert.match(render, /gl\.uniform1f\(this\.locations\.motion, this\.autonomousSpin \? 1 : 0\)/);
 });
 
 test("WebGPU render adds interactionSpin to the spin uniform", () => {
   const render = extractMethod(engineSource, "render", 2);
   assert.ok(render, "WebGPU render() body not found");
   assert.match(render, /spin: this\.spin \+ \(this\.autonomousSpin \? time \* 0\.08 : 0\) \+ \(this\.interactionSpin \|\| 0\)/);
+  assert.match(render, /pitch: this\.interactionPitch/);
+  assert.match(render, /motion: this\.autonomousSpin \? 1 : 0/);
 });
 
 test("OrbRenderer exposes a setInteractionSpin method", () => {
@@ -303,6 +308,11 @@ test("WebGPUOrbRenderer exposes a setInteractionSpin method", () => {
   const body = extractMethod(engineSource, "setInteractionSpin", 2);
   assert.ok(body, "setInteractionSpin() body not found in webgpu-engine.js");
   assert.match(body, /this\.interactionSpin = value/);
+});
+
+test("both renderers expose a shader-space pitch control", () => {
+  assert.match(mainSource, /setInteractionPitch\(value\)/);
+  assert.match(engineSource, /setInteractionPitch\(value\)/);
 });
 
 test("both renderers expose autonomous spin controls", () => {
@@ -322,6 +332,7 @@ test("initializeWebGPU applies interactionCurrent to new WebGPU renderers", () =
   const body = extractMethod(mainSource, "initializeWebGPU", 0);
   assert.ok(body, "initializeWebGPU() body not found");
   assert.match(body, /renderer\.setInteractionSpin\(interactionCurrent\)/);
+  assert.match(body, /engine\.interactiveMotion = interactiveEnabled/);
 });
 
 // --- debug observability ---
@@ -332,9 +343,7 @@ test("window.__orbDebug exposes interaction state", () => {
   assert.match(mainSource, /source: interactionSource/);
   assert.match(mainSource, /target: \+interactionTarget\.toFixed\(4\)/);
   assert.match(mainSource, /current: \+interactionCurrent\.toFixed\(4\)/);
-  assert.match(mainSource, /targetTiltX: \+interactionTargetTiltX\.toFixed\(2\)/);
-  assert.match(mainSource, /targetTiltY: \+interactionTargetTiltY\.toFixed\(2\)/);
-  assert.match(mainSource, /currentTiltX: \+interactionCurrentTiltX\.toFixed\(2\)/);
-  assert.match(mainSource, /currentTiltY: \+interactionCurrentTiltY\.toFixed\(2\)/);
+  assert.match(mainSource, /targetPitch: \+interactionTargetPitch\.toFixed\(4\)/);
+  assert.match(mainSource, /currentPitch: \+interactionCurrentPitch\.toFixed\(4\)/);
   assert.match(mainSource, /permission: interactionPermission/);
 });

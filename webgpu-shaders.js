@@ -67,6 +67,8 @@ struct U {
   lens: f32,
   starDensity: f32,
   fidelity: f32,
+  pitch: f32,
+  motion: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -240,17 +242,20 @@ fn starfield(n: vec3f, t: f32) -> vec4f {
 // the hand, so the pattern travels over the poles too, not just sideways.
 fn sphereAt(n0: vec3f, spin: f32, t: f32) -> vec4f {
   var n = n0;
-  let roll = t * 0.13; // roll around the view axis
+  let roll = t * 0.13 * u.motion; // roll around the view axis
   let cr = cos(roll);
   let sr = sin(roll);
   n = vec3f(cr * n.x - sr * n.y, sr * n.x + cr * n.y, n.z);
-  let tilt = 0.45 + 0.35 * sin(t * 0.24); // precessing axis
+  let tilt = (0.45 + 0.35 * sin(t * 0.24)) * u.motion; // precessing axis
   let cx = cos(tilt);
   let sx = sin(tilt);
   n = vec3f(n.x, cx * n.y - sx * n.z, sx * n.y + cx * n.z);
   let cs = cos(spin);
   let ss = sin(spin);
   n = vec3f(cs * n.x + ss * n.z, n.y, -ss * n.x + cs * n.z);
+  let cp = cos(u.pitch);
+  let sp = sin(u.pitch);
+  n = vec3f(n.x, cp * n.y - sp * n.z, sp * n.y + cp * n.z);
   return starfield(n, t);
 }
 

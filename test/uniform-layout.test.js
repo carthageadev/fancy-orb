@@ -21,14 +21,16 @@ const EXPECTED_FIELDS = [
   "arch",
   "lens",
   "starDensity",
-  "fidelity"
+  "fidelity",
+  "pitch",
+  "motion"
 ];
 
 test("uniform offsets cover exactly the WGSL struct fields", () => {
   assert.deepEqual(Object.keys(UNIFORM_OFFSETS), EXPECTED_FIELDS);
 });
 
-test("offsets are strictly ascending and stay inside the 128-byte struct", () => {
+test("offsets are strictly ascending and stay inside the 144-byte struct", () => {
   const offsets = Object.values(UNIFORM_OFFSETS);
   for (let index = 1; index < offsets.length; index += 1) {
     assert.ok(offsets[index] > offsets[index - 1], `offset ${index} not ascending`);
@@ -46,9 +48,9 @@ test("vec3 fields align to 16 bytes (std140)", () => {
 });
 
 test("scalar fields are 4-byte aligned and sequential", () => {
-  const scalars = ["time", "phase", "audio", "spin", "arch", "lens", "starDensity", "fidelity"];
+  const scalars = ["time", "phase", "audio", "spin", "arch", "lens", "starDensity", "fidelity", "pitch", "motion"];
   const offsets = scalars.map((field) => UNIFORM_OFFSETS[field]);
-  assert.deepEqual(offsets, [96, 100, 104, 108, 112, 116, 120, 124]);
+  assert.deepEqual(offsets, [96, 100, 104, 108, 112, 116, 120, 124, 128, 132]);
 });
 
 test("dynamic offsets align to the device-required slot size", () => {
@@ -72,7 +74,9 @@ test("writeUniforms places values at the declared offsets", () => {
     arch: 1,
     lens: 1,
     starDensity: 0.25,
-    fidelity: 1
+    fidelity: 1,
+    pitch: 0.25,
+    motion: 0
   });
   assert.equal(view[0], 1280);
   assert.ok(Math.abs(view[4] - 0.1) < 1e-6, "float32 rounding allowed");
@@ -81,6 +85,8 @@ test("writeUniforms places values at the declared offsets", () => {
   assert.ok(Math.abs(view[26] - 0.035) < 1e-6);
   assert.ok(Math.abs(view[27] - 0.893) < 1e-6);
   assert.equal(view[31], 1);
+  assert.equal(view[32], 0.25);
+  assert.equal(view[33], 0);
 });
 
 test("slots never overlap: two orbs at consecutive slots stay disjoint", () => {
@@ -100,7 +106,9 @@ test("slots never overlap: two orbs at consecutive slots stay disjoint", () => {
     arch: 1,
     lens: 1,
     starDensity: 1,
-    fidelity: 1
+    fidelity: 1,
+    pitch: 0,
+    motion: 1
   });
   assert.equal(view[slotBytes + UNIFORM_OFFSETS.time / 4], 99, "slot 1 time written");
   for (let index = 0; index < slotBytes; index += 1) {
