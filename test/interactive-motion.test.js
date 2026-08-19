@@ -220,7 +220,7 @@ test("pointer handler maps horizontal yaw and vertical pitch independently", () 
   assert.match(body, /\(normX - 0\.5\) \* 1\.2/, "x mapping to [-0.6, 0.6]");
   assert.match(body, /interactionTarget = clamp\(\(normX - 0\.5\) \* 1\.2, -0\.6, 0\.6\)/);
   assert.doesNotMatch(body, /targetY/);
-  assert.match(body, /interactionTargetPitch = clamp\(\(0\.5 - normY\) \* 1\.0, -0\.5, 0\.5\)/);
+  assert.match(body, /interactionTargetPitch = clamp\(\(normY - 0\.5\) \* 1\.0, -0\.5, 0\.5\)/);
 });
 
 test("orientation handler maps gamma/beta deltas into bounded offset", () => {

@@ -579,7 +579,9 @@ function onInteractivePointerMove(event) {
   const normY = (event.clientY - rect.top) / rect.height;
   // Screen axes stay independent: horizontal yaw and vertical pitch.
   interactionTarget = clamp((normX - 0.5) * 1.2, -0.6, 0.6);
-  interactionTargetPitch = clamp((0.5 - normY) * 1.0, -0.5, 0.5);
+  // Sphere sampling is inverse-mapped, so the pointer Y sign is reversed to
+  // make the visible surface travel with the cursor rather than against it.
+  interactionTargetPitch = clamp((normY - 0.5) * 1.0, -0.5, 0.5);
   if (interactionSource !== "orientation") interactionSource = "pointer";
 }
 
