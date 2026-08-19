@@ -118,11 +118,10 @@ animation and visuals are unchanged; when checked:
 - **Desktop**: pointer movement over `.orb-stage` influences the orb's spin.
   Horizontal position is the primary axis (±0.6 radians); vertical position
   adds a small contribution (±0.06 radians).
-- **Mobile**: device orientation (gamma/beta) influences the orb's spin.
-  A neutral baseline is captured on enable, and subsequent tilt deltas map
-  into a bounded offset (roughly ±0.6 radians). Screen orientation is not
-  handled separately — browsers already report gamma/beta relative to the
-  current natural orientation.
+- **Mobile**: device orientation maps gamma/beta into independent screen axes.
+  Left/right tilt controls horizontal spin, while forward/back tilt controls a
+  visible up/down pitch. A neutral baseline is captured on enable, and the
+  mapping follows portrait or landscape screen orientation.
 - **iOS Safari**: `DeviceOrientationEvent.requestPermission()` is requested
   from the checkbox user gesture. If permission is denied or the API is
   unavailable, the toggle remains checked but the hint updates to indicate

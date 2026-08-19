@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 const mainSource = readFileSync(new URL("../main.js", import.meta.url), "utf8");
 const engineSource = readFileSync(new URL("../webgpu-engine.js", import.meta.url), "utf8");
+const stylesSource = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 // Extract the body of a top-level or class method at the given indentation.
 // Handles async functions and balances braces so nested callbacks and object
@@ -221,11 +222,13 @@ test("pointer handler maps x to [-0.6, 0.6] range and clamps", () => {
 test("orientation handler maps gamma/beta deltas into bounded offset", () => {
   const body = extractMethod(mainSource, "onDeviceOrientation", 0);
   assert.ok(body, "onDeviceOrientation() body not found");
-  assert.match(body, /gammaDelta \* 0\.02/, "gamma factor ~30° → 0.6 rad");
-  assert.match(body, /betaDelta \* 0\.01/, "smaller beta contribution");
-  assert.match(body, /clamp\(gammaDelta \* 0\.02 \+ betaDelta \* 0\.01, -0\.6, 0\.6\)/);
-  assert.match(body, /interactionTargetTiltX = clamp\(-betaDelta \* 0\.18, -8, 8\)/);
-  assert.match(body, /interactionTargetTiltY = clamp\(gammaDelta \* 0\.18, -8, 8\)/);
+  assert.match(body, /let horizontalDelta = gammaDelta/);
+  assert.match(body, /let verticalDelta = betaDelta/);
+  assert.match(body, /interactionTarget = clamp\(horizontalDelta \* 0\.02, -0\.6, 0\.6\)/);
+  assert.match(body, /interactionTargetTiltX = clamp\(-verticalDelta \* 0\.45, -18, 18\)/);
+  assert.match(body, /interactionTargetTiltY = clamp\(horizontalDelta \* 0\.45, -18, 18\)/);
+  assert.match(body, /screenAngle === 90/);
+  assert.match(body, /screenAngle === 270/);
 });
 
 test("orientation handler captures neutral baseline on first event", () => {
@@ -268,6 +271,12 @@ test("frame loop decays interactionCurrent to zero after disable", () => {
   assert.match(frame, /interactiveEnabled[\s\S]*interactionCurrent !== 0[\s\S]*interactionCurrentTiltX !== 0/);
   assert.match(frame, /interactionCurrentTiltX !== 0/);
   assert.match(frame, /interactionCurrentTiltY !== 0/);
+});
+
+test("orb visual exposes a visible two-axis perspective tilt", () => {
+  assert.match(stylesSource, /perspective\(700px\) rotateX\(var\(--orb-tilt-x/);
+  assert.match(stylesSource, /rotateY\(var\(--orb-tilt-y/);
+  assert.match(stylesSource, /transform-style: preserve-3d/);
 });
 
 // --- both renderer spin paths ---

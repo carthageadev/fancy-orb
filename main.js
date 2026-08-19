@@ -581,13 +581,10 @@ function onInteractivePointerLeave() {
   interactionTargetTiltY = 0;
 }
 
-// Device orientation handler. Gamma (left-right tilt, [-90, 90]) is the
-// primary axis; beta (front-back tilt) adds a small secondary contribution.
-// The neutral baseline is captured on the first event after enable so the
-// orb follows relative movement rather than absolute device angle. Screen
-// orientation is not handled separately: browsers already report gamma/beta
-// relative to the current natural orientation, so the mapping is correct
-// regardless of portrait/landscape.
+// Device orientation handler. Map the physical device axes into screen
+// horizontal/vertical axes first, then keep horizontal spin and vertical tilt
+// independent. This also keeps the controls intuitive after rotating the phone
+// into landscape.
 function onDeviceOrientation(event) {
   if (!interactiveEnabled) return;
   const { gamma, beta } = event;
@@ -600,10 +597,24 @@ function onDeviceOrientation(event) {
   }
   const gammaDelta = gamma - gyroNeutralGamma;
   const betaDelta = beta - gyroNeutralBeta;
-  // ~30° gamma ≈ 0.52 rad → factor 0.02 maps to ~0.6; beta contributes less
-  interactionTarget = clamp(gammaDelta * 0.02 + betaDelta * 0.01, -0.6, 0.6);
-  interactionTargetTiltX = clamp(-betaDelta * 0.18, -8, 8);
-  interactionTargetTiltY = clamp(gammaDelta * 0.18, -8, 8);
+  const screenAngle = ((Number(window.screen?.orientation?.angle ?? window.orientation ?? 0) % 360) + 360) % 360;
+  let horizontalDelta = gammaDelta;
+  let verticalDelta = betaDelta;
+  if (screenAngle === 90) {
+    horizontalDelta = betaDelta;
+    verticalDelta = -gammaDelta;
+  } else if (screenAngle === 180) {
+    horizontalDelta = -gammaDelta;
+    verticalDelta = -betaDelta;
+  } else if (screenAngle === 270) {
+    horizontalDelta = -betaDelta;
+    verticalDelta = gammaDelta;
+  }
+  // Horizontal movement controls spin; vertical movement controls visible
+  // pitch. The larger tilt range makes up/down motion clear on a flat canvas.
+  interactionTarget = clamp(horizontalDelta * 0.02, -0.6, 0.6);
+  interactionTargetTiltX = clamp(-verticalDelta * 0.45, -18, 18);
+  interactionTargetTiltY = clamp(horizontalDelta * 0.45, -18, 18);
   interactionSource = "orientation";
 }
 
